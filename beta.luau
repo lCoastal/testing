@@ -1208,6 +1208,8 @@ local function dredgeCycle(id)
             else why=err end
         end
         if not arrived then
+            S.dredgeCurrentWork="Route blocked: "..targetZone
+            S.dredgeNextWork="Record checkpoints (stone -> dig) or move manually"
             local tries=(S.dredgeTravelFailed[targetZone] or 0)+1
             S.dredgeTravelFailed[targetZone]=tries
             S.dredgeTravelRetryAt=os.clock()+8
@@ -2183,19 +2185,24 @@ bind(exportPresetButton.MouseButton1Click,function()
         "GALAXIS HUB ZONE PRESETS | VERSION 2",
         "Export: "..os.date("%Y-%m-%d %H:%M:%S"),
         "Note: Each CFrame is 12 comma-separated numbers (position + rotation).",
+        "Route points are ordered from mapped stone to digging spot; reverse on return.",
         "An empty field means not configured. This is NOT a complete farming preset until both positions are saved.",
         "",
         "=== MINING ZONES (35) ===",
-        "Zone\tMapped Waypoint\tDig CFrame\tWater CFrame"
+        "Zone\tMapped Waypoint\tDig CFrame\tWater CFrame\tRoute CFrames (stone -> dig)"
     }
     local mapped,complete=0,0
     for _,name in ipairs(ZONE_NAMES) do
         local p=S.presets[name] or {}
         local wp=p.waypoint or ""
         local dig,water=exportZoneCFrame(p.dig),exportZoneCFrame(p.water)
+        local routeParts={}
+        for _,point in ipairs(p.route or {}) do
+            routeParts[#routeParts+1]=exportZoneCFrame(point)
+        end
         if wp~="" then mapped+=1 end
         if dig~="" and water~="" then complete+=1 end
-        lines[#lines+1]=table.concat({name,wp,dig,water},"\t")
+        lines[#lines+1]=table.concat({name,wp,dig,water,table.concat(routeParts," ; ")},"\t")
     end
     lines[#lines+1]=""
     lines[#lines+1]="=== FAST TRAVEL WAYPOINTS (21) ==="
