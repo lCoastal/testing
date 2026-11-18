@@ -643,9 +643,17 @@ local function dredgeCycle(id)
         and eligible(S.dredgeCurrent,5)
         and S.dredgePlanLuck and math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
         and S.dredgePlanCapacity==capacityNow then
+        local progressShift=false
         for _,g in ipairs(S.dredgeGroup) do
-            if (need[g.m] or 0)>0 then keep=true;break end
+            local planned=S.dredgePlannedRemaining and S.dredgePlannedRemaining[g.m] or 0
+            local left=need[g.m] or 0
+            if planned>0 and math.abs(planned-left)/planned>=.10 then
+                progressShift=true
+                break
+            end
+            if left>0 then keep=true end
         end
+        if progressShift then keep=false end
     end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
@@ -659,6 +667,8 @@ local function dredgeCycle(id)
         S.dredgeTargetCap=choice.cap
         S.dredgePlanLuck=L
         S.dredgePlanCapacity=capacityNow
+        S.dredgePlannedRemaining={}
+        for _,v in ipairs(wants) do S.dredgePlannedRemaining[v.m]=v.n end
         S.dredgePlanText=string.format("%d/%d goals, ~%.0f pans",
             plan.covered,plan.needed,plan.total)
     end
@@ -995,6 +1005,7 @@ stop=function()
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false;S.dredgeAppliedCap="UNSET"
     S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
+        S.dredgePlannedRemaining=nil
     if hadDredge and S.dredgeRestore then
         S.dig=S.dredgeRestore.dig;S.water=S.dredgeRestore.water
         S.activeZone=S.dredgeRestore.zone
@@ -1400,6 +1411,7 @@ local function startWorker(asDredge)
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
         S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
+        S.dredgePlannedRemaining=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
         dredgeButton.Text="AUTO DREDGE: ON"
         dredgeText("Starting / reading Dredge quest")
