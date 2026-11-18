@@ -9,6 +9,19 @@ local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local PathfindingService = game:GetService("PathfindingService")
 local E = getgenv()
+-- Reduce Output spam by default. Enable verbose logging before running Beta:
+-- getgenv().GalaxisDebugOutput = true
+local OUTPUT_DEBUG = E.GalaxisDebugOutput == true
+local outputWarnings = {}
+local function outputDebug(...)
+    if OUTPUT_DEBUG then print(...) end
+end
+local function outputWarning(key,...)
+    local now=os.clock()
+    if outputWarnings[key] and now-outputWarnings[key]<45 then return end
+    outputWarnings[key]=now
+    warn(...)
+end
 if E.CoastalSafeFarm and E.CoastalSafeFarm.Close then
     pcall(function() E.CoastalSafeFarm:Close() end)
 end
@@ -333,7 +346,8 @@ S.dredgeCapLockedKey=nil;S.dredgeTurnAttempts=0
 local dredgeButton,dredgeStatus,show,stop
 local function dredgeText(str)
     if dredgeStatus then dredgeStatus.Text=str end
-    if S.dredgeLastText~=str then S.dredgeLastText=str;print("[GALAXIS DREDGE] "..str) end
+    -- Update GUI on every change, but keep Output quiet.
+    if S.dredgeLastText~=str then S.dredgeLastText=str;outputDebug("[GALAXIS DREDGE] "..str) end
 end
 local function baseDrop(s)
     return (s:gsub("%s*%(inside Firefly Zones%)","")
@@ -676,7 +690,7 @@ local function refreshDredgeServerQuest(id)
     S.dredgeServerStatus=state
     if not old or old.status~=state.status or old.step~=state.step
       or old.canStart~=state.canStart then
-        print("[GALAXIS DREDGE QUEST] CanStartQuest:",tostring(state.canStart),
+        outputDebug("[GALAXIS DREDGE QUEST] CanStartQuest:",tostring(state.canStart),
             "status:",tostring(state.status),"step:",tostring(state.step))
     end
     -- The server can supply current StepProgress even if the UI cache is stale.
@@ -703,7 +717,7 @@ task.spawn(function()
             local ok,err=pcall(refreshDredgeServerQuest,current)
             if not ok then
                 S.dredgeQuestPollError=tostring(err)
-                warn("[GALAXIS DREDGE] Server quest poll:",err)
+                outputWarning("dredge-server-quest", "[GALAXIS DREDGE] Server quest poll:",err)
             end
             S.dredgePollBusy=false
         end
@@ -1261,7 +1275,7 @@ local function dredgeCycle(id)
         S.dredgeCapLastAt=os.clock()
         S.dredgeCapLockedZone=targetZone
         S.dredgeCapLockedKey=capKey
-        print("[GALAXIS DREDGE] Luck Cap applied once for zone:",targetZone,capText)
+        outputDebug("[GALAXIS DREDGE] Luck Cap applied once for zone:",targetZone,capText)
         if not pause(.2,id) then return false end
     end
     if os.clock()<(S.dredgeReadyAt or 0) then
@@ -1358,7 +1372,7 @@ local function flush()
         for _,line in ipairs(L.unsaved) do retry[#retry+1]=line end
         L.unsaved=retry
         L.error=tostring(err)
-        warn("[GALAXIS HUB LOGGER] Write failure:",err)
+        outputWarning("mineral-file-"..tostring(err),"[GALAXIS HUB LOGGER] Write failure:",err)
     end
     L.writing=false
 end
@@ -2247,8 +2261,8 @@ bind(exportPresetButton.MouseButton1Click,function()
     end
     show(string.format("Exported %d mapped / %d complete; TXT: %s, copied: %s",
         mapped,complete,saveOk and "yes" or "no",copyOk and "yes" or "no"))
-    if not saveOk then
-        print("[GALAXIS HUB] Preset export (file API unavailable):\n"..contents)
+    if not saveOk and not copyOk then
+        outputWarning("preset-export","[GALAXIS HUB] Preset export could not be saved or copied")
     end
 end)
 
@@ -2362,8 +2376,14 @@ local function startWorker(asDredge)
                     end
                     S.dredgeFailureCount=(S.dredgeFailureCount or 0)+1
                     local attempts=S.dredgeFailureCount
-                    warn("[GALAXIS DREDGE] Zone recovery",zoneName,
-                        attempts,tostring(reason))
+                    if attempts>=5 then
+                        outputWarning("dredge-zone-"..zoneName,
+                            "[GALAXIS DREDGE] Stopped after repeated failures:",
+                            zoneName,tostring(reason))
+                    else
+                        outputDebug("[GALAXIS DREDGE] Zone recovery",zoneName,
+                            attempts,tostring(reason))
+                    end
                     if attempts>=5 then
                         stop()
                         dredgeText("Stopped after 5 failed cycles at "..zoneName..
@@ -2393,7 +2413,7 @@ local function startWorker(asDredge)
                     if not pause(math.min(2.5,.65*attempts),id) then break end
                 else
                     show("Recovering in 0.25s: "..tostring(reason):sub(1,58))
-                    warn("[GALAXIS HUB] Auto recovery:",reason)
+                    outputDebug("[GALAXIS HUB] Auto recovery:",reason)
                     if not pause(CFG.recoveryDelay,id) then break end
                 end
             end
@@ -2446,5 +2466,8 @@ bind(P.CharacterRemoving,function()
         show("Character changed - recovering")
     end
 end)
-print("[GALAXIS HUB BETA] Loaded. TSV:",FILE)
-if L.error then warn("[GALAXIS HUB BETA] Logger:",L.error) end
+print("[GALAXIS HUB BETA] Ready | mineral log:",FILE,
+    "| verbose Output:",OUTPUT_DEBUG and "ON" or "OFF")
+if L.error then
+    outputWarning("startup-logger","[GALAXIS HUB BETA] Logger:",L.error)
+end
