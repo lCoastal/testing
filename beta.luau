@@ -352,19 +352,70 @@ local function pause(sec,id,ready)
     end
     return valid(id)
 end
+-- One in-flight request per RemoteFunction. If a request times out locally,
+-- the server may still complete it. Preserve that result for the retry
+-- instead of accidentally sending a second Collect/Pan concurrently.
 local function invoke(r,id,...)
-    if not valid(id) then return false end
+    if not valid(id) then return false,nil,"Worker stopped" end
+    S.rpcInFlight=S.rpcInFlight or setmetatable({},{__mode="k"})
+    local call=S.rpcInFlight[r]
+    if call then
+        if call.token~=id then
+            S.rpcInFlight[r]=nil -- previous stopped session
+        else
+            if not call.done then
+                local waitUntil=os.clock()+CFG.timeout*2
+                while valid(id) and not call.done and os.clock()<waitUntil do
+                    task.wait(.05)
+                end
+            end
+            if not valid(id) then return false,nil,"Worker stopped" end
+            if not call.done then
+                local info=string.format("%s still pending for %.1fs",
+                    r.Name,os.clock()-call.started)
+                S.diagEvent("RPC_STILL_PENDING",info)
+                return false,nil,info
+            end
+            S.rpcInFlight[r]=nil
+            if not call.ok then
+                return false,nil,"Delayed "..r.Name.." error: "..tostring(call.response)
+            end
+            S.diagEvent("RPC_LATE_RESPONSE",r.Name..
+                " completed after local timeout ("..
+                string.format("%.2fs",os.clock()-call.started)..")")
+            return true,call.response,nil
+        end
+    end
     local args=table.pack(...)
-    local done,ok,res=false,false,nil
+    call={token=id,started=os.clock(),done=false,ok=false,response=nil}
+    S.rpcInFlight[r]=call
     task.spawn(function()
         if valid(id) then
-            ok,res=pcall(function() return r:InvokeServer(table.unpack(args,1,args.n)) end)
+            call.ok,call.response=pcall(function()
+                return r:InvokeServer(table.unpack(args,1,args.n))
+            end)
+        else
+            call.ok=false
+            call.response="Worker stopped before call"
         end
-        done=true
+        call.done=true
     end)
     local deadline=os.clock()+CFG.timeout
-    while not done and valid(id) and os.clock()<deadline do task.wait(.01) end
-    return done and ok and valid(id),res
+    while valid(id) and not call.done and os.clock()<deadline do task.wait(.01) end
+    if not valid(id) then return false,nil,"Worker stopped" end
+    if not call.done then
+        local detail=string.format("%s timed out after %.1fs (still in flight)",
+            r.Name,CFG.timeout)
+        S.diagEvent("RPC_TIMEOUT",detail)
+        return false,nil,detail
+    end
+    S.rpcInFlight[r]=nil
+    if not call.ok then
+        local detail="InvokeServer error: "..tostring(call.response)
+        S.diagEvent("RPC_ERROR",r.Name.." | "..detail:sub(1,200))
+        return false,nil,detail
+    end
+    return true,call.response,nil
 end
 local function move(cf,id)
     for _=1,2 do
@@ -2133,20 +2184,22 @@ local function farming(id,r,target)
             -- This records lag without changing request cadence or timing.
             local sentAt=os.clock()
             S.diagCollectPendingAt=sentAt
-            local ok,response=invoke(r.dig,id,1)
+            local ok,response,invokeError=invoke(r.dig,id,1)
             local elapsed=os.clock()-sentAt
             S.diagCollectPendingAt=nil
             S.diagLastCollectMs=math.floor(elapsed*1000+.5)
-            S.diagLastCollectResult=tostring(response)
+            S.diagLastCollectResult=ok and tostring(response) or tostring(invokeError)
             S.diagDigCalls+=1
             if elapsed>=.65 then
                 S.diagEvent("COLLECT_SLOW",
                     string.format("%.2fs %s before=%s after=%s",
-                        elapsed,tostring(response),tostring(before),tostring(fill(r))))
+                        elapsed,tostring(ok and response or invokeError),
+                        tostring(before),tostring(fill(r))))
             end
             if not ok then
-                S.diagEvent("COLLECT_CALL_FAILED",S.diagSnapshot())
-                return "Collect failed"
+                S.diagEvent("COLLECT_CALL_FAILED",
+                    tostring(invokeError).." | "..S.diagSnapshot())
+                return "Collect failed: "..tostring(invokeError)
             end
             -- InvokeServer already waits for a server reply. On acknowledged
             -- Fill progress, go straight to the next Collect with no extra sleep.
@@ -2201,10 +2254,11 @@ local function farming(id,r,target)
         local accepted=false
         for _=1,15 do
             if not valid(id) then return end
-            local ok,result=invoke(r.pan,id)
+            local ok,result,invokeError=invoke(r.pan,id)
             if not ok then
-                S.diagEvent("PAN_CALL_FAILED",S.diagSnapshot())
-                return "Pan call failed"
+                S.diagEvent("PAN_CALL_FAILED",
+                    tostring(invokeError).." | "..S.diagSnapshot())
+                return "Pan call failed: "..tostring(invokeError)
             end
             if result==true then accepted=true;break end
             S.diagEvent("PAN_REJECT","response="..tostring(result).." | "..S.diagSnapshot())
