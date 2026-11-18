@@ -1171,6 +1171,9 @@ end
 local function followRoutePoints(zoneName,id,reverse)
     local p=S.presets[zoneName]
     local nodes=p and p.route or {}
+    S.diagEvent("WALK_ROUTE_START",string.format(
+        "zone=%s direction=%s checkpoints=%d",
+        tostring(zoneName),reverse and "to warp" or "to sand",#nodes))
     for i=1,#nodes do
         local index=reverse and (#nodes-i+1) or i
         local cf=unpackCF(nodes[index])
@@ -1178,17 +1181,26 @@ local function followRoutePoints(zoneName,id,reverse)
             local r=root()
             if not r then return false,"Character missing" end
             if (r.Position-cf.Position).Magnitude>14 then
+                S.diagEvent("WALK_CHECKPOINT_START",string.format(
+                    "zone=%s point=%d/%d dist=%.1f",
+                    tostring(zoneName),index,#nodes,(r.Position-cf.Position).Magnitude))
                 local ok,err=walkRoute(cf,id,1800,true)
                 if not ok then
                     local bridged,bridgeErr=walkGroundBridge(cf,id)
                     if not bridged then
+                        S.diagEvent("WALK_CHECKPOINT_ERROR",tostring(err)..
+                            " / "..tostring(bridgeErr))
                         return false,"Route checkpoint "..index.."/"..#nodes..": "..
                             tostring(err).." / "..tostring(bridgeErr)
                     end
                 end
+                S.diagEvent("WALK_CHECKPOINT_END",string.format(
+                    "zone=%s checkpoint=%d/%d",tostring(zoneName),index,#nodes))
             end
         end
     end
+    S.diagEvent("WALK_ROUTE_END",tostring(zoneName)..
+        (reverse and " -> warp" or " -> dig"))
     return valid(id)
 end
 local function returnToMappedStone(id)
@@ -1553,6 +1565,7 @@ local function dredgeCycle(id)
             dredgeText("Travel cooldown - preventing warp spam");return false
         end
         dredgeText("Walking to "..targetZone)
+        S.traceBegin("DREDGE_ZONE_TRAVEL",tostring(targetZone))
         local r=root()
         local closeEnough=r and (r.Position-S.dig.Position).Magnitude<165
         local arrived,why=false,nil
@@ -1570,6 +1583,7 @@ local function dredgeCycle(id)
             else why=err end
         end
         if not arrived then
+            S.traceEnd("DREDGE_ZONE_TRAVEL","failed: "..tostring(why))
             S.dredgeCurrentWork="Route blocked: "..targetZone
             S.dredgeNextWork="Record checkpoints (stone -> dig) or move manually"
             local tries=(S.dredgeTravelFailed[targetZone] or 0)+1
@@ -1582,6 +1596,7 @@ local function dredgeCycle(id)
             dredgeText("Stopped: no stable walking route to "..targetZone)
             return false
         end
+        S.traceEnd("DREDGE_ZONE_TRAVEL","arrived at "..tostring(targetZone))
         S.dredgeTravelRetryAt=nil
         -- After a successful arrival, allow one new fallback warp on a
         -- separate FUTURE visit, not repeatedly during this visit.
@@ -2344,14 +2359,23 @@ local function farming(id,r,target)
         local newCapacity=capacity()
         if newCapacity and newCapacity>0 then target=newCapacity end
         local cycleStart=os.clock()
+        S.diagEvent("CYCLE_START","fill="..tostring(fill(r))..
+            " target="..tostring(target).." zone="..tostring(S.dredgeAt or S.activeZone))
         show("Digging")
-        if not farmMove(S.dig,id) then return "Could not reach dig position" end
+        S.traceBegin("MOVE_TO_DIG","distance to sand="..
+            (root() and S.dig and
+                string.format("%.1f",(root().Position-S.dig.Position).Magnitude) or "N/A"))
+        local movedToDig=farmMove(S.dig,id)
+        S.traceEnd("MOVE_TO_DIG","success="..tostring(movedToDig))
+        if not movedToDig then return "Could not reach dig position" end
         local freshlyChanged=S.dredge and S.dredgeAt and
             (S.cycles-(S.dredgeZoneCycle or 0))<2
         -- After a zone switch, give the new deposit enough time to register
         -- before firing the normal rapid Collect calls. Normal pans unchanged.
         if freshlyChanged and not pause(.42,id) then return end
         local lastProgress=os.clock()
+        S.traceBegin("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
+            " / "..tostring(target))
         local lastStallLog=lastProgress
         S.diagDigProgressAt=lastProgress
         S.diagDigCalls=0
@@ -2409,6 +2433,9 @@ local function farming(id,r,target)
             end
         end
         S.diagCollectPendingAt=nil
+        S.traceEnd("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
+            " / "..tostring(target)..
+            " | collectCalls="..tostring(S.diagDigCalls))
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then
             S.diagEvent("PAN_NOT_FULL",S.diagSnapshot())
@@ -2426,13 +2453,19 @@ local function farming(id,r,target)
 
         show("Panning")
         local waterStart=os.clock()
-        if not farmMove(S.water,id) then return "Could not reach water" end
+        S.traceBegin("MOVE_TO_WATER","fill="..tostring(fill(r)))
+        local movedToWater=farmMove(S.water,id)
+        S.traceEnd("MOVE_TO_WATER","success="..tostring(movedToWater))
+        if not movedToWater then return "Could not reach water" end
         if freshlyChanged and not pause(.5,id) then return end
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
         local panStart=os.clock()
+        S.traceBegin("PAN_INVOKE","fill="..tostring(fill(r)))
         local accepted=false
+        local panAttempts=0
         for _=1,15 do
+            panAttempts+=1
             if not valid(id) then return end
             local ok,result,invokeError=invoke(r.pan,id)
             if not ok then
@@ -2446,9 +2479,12 @@ local function farming(id,r,target)
         end
         if not accepted then return "Pan rejected" end
         local panTime=os.clock()-panStart
+        S.traceEnd("PAN_INVOKE",string.format(
+            "accepted after %d attempt(s), %.3fs",panAttempts,panTime))
 
         show("Shaking")
         local shakeStart=os.clock()
+        S.traceBegin("SHAKE_LOOP","rewards=0 | doubleShake="..tostring(S.doubleShake))
         local earlyMoved=false
         local earlyTime=0
         local function finished()
@@ -2521,6 +2557,8 @@ local function farming(id,r,target)
             if not pause(.16,id) then return end
         end
         local shakeTime=os.clock()-shakeStart
+        S.traceEnd("SHAKE_LOOP","rewards="..tostring(S.rewards)..
+            " completed="..tostring(S.completed))
 
         S.waiting=false
         if S.dredge then
@@ -2536,6 +2574,9 @@ local function farming(id,r,target)
         local sum=0
         for _,v in ipairs(recent) do sum+=v end
         local ppm=sum>0 and (60*#recent/sum) or 0
+        S.diagEvent("CYCLE_DONE",string.format(
+            "cycle=%d total=%.3fs dig=%.3fs water=%.3fs pan=%.3fs shake=%.3fs rewards=%d",
+            S.cycles,total,digTime,waterTime,panTime,shakeTime,S.rewards))
         -- Footer refreshes independently every 0.25s.
         autoSell(id,S.cycles)
     end
@@ -2874,6 +2915,10 @@ local function startWorker(asDredge)
             S.waiting=false
 
             if valid(id) then
+                -- A failed action may have returned before its ACTION_END.
+                S.traceCurrentAction=nil
+                S.traceActionStartedAt=nil
+                S.traceNextStallAt=nil
                 S.diagLastFailure=tostring(reason)
                 S.diagEvent("RECOVERY",tostring(reason).." | "..S.diagSnapshot())
                 if S.dredge and S.dredgeAt then
