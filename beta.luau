@@ -1883,7 +1883,9 @@ local function farming(id,r,target)
     while valid(id) do
         if S.dredge and not dredgeCycle(id) then
             if not valid(id) then return end
-            if not pause(1.5,id) then return end
+            -- The 1.5-second pause was unnecessarily delaying the next
+            -- cycle when quest/progress/zone state just needed to settle.
+            if not pause(.3,id) then return end
             continue
         end
         -- Refresh capacity each cycle, including equipment/buff changes.
@@ -1919,7 +1921,8 @@ local function farming(id,r,target)
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then return "Pan not full" end
         if S.dredge then
-            if not pause(.28,id) then return end
+            -- Fill is already replicated; a short confirmation is enough.
+            if not pause(.08,id) then return end
             local finalFill=fill(r)
             if not finalFill or finalFill<target-.01 then
                 return "Dig fill not confirmed"
@@ -1954,11 +1957,13 @@ local function farming(id,r,target)
             if not S.dredge then
                 return S.completed or (S.rewards>0 and now-S.lastReward>=CFG.rewardGap)
             end
-            if S.completed then
-                return S.rewards==0 or now-S.lastReward>=.52
-            end
-            return S.rewards>0 and now-panStart>=2 and
-                now-S.lastReward>=1.4
+            -- PanningComplete is the authoritative end of a pan.
+            -- Do not keep shaking/standing idle for a second afterward.
+            if S.completed then return true end
+            -- Only when the event is missing, conservatively use a
+            -- reward-quiet fallback to avoid dropping late minerals.
+            return S.rewards>0 and now-panStart>=1.8 and
+                now-S.lastReward>=1.15
         end
         -- Experimental early travel after first two rewards and a very short lull.
         -- Starts at ~30ms of quiet instead of ~165ms. If leaving water
@@ -2007,15 +2012,11 @@ local function farming(id,r,target)
         end
         if not done then return "No completion detected" end
         if not valid(id) then return end
-        if S.dredge then
-            local untilQuiet=os.clock()+.52
-            while valid(id) and os.clock()<untilQuiet do
-                if S.rewards>0 and os.clock()-S.lastReward<.52 then
-                    untilQuiet=os.clock()+.52
-                end
-                task.wait(.05)
-            end
-            if not valid(id) then return end
+        if S.dredge and S.completed then
+            -- One short grace period after the authoritative completion event.
+            -- No second 0.52-second wait; the reward fallback has already
+            -- waited sufficiently if no completion event fired.
+            if not pause(.16,id) then return end
         end
         local shakeTime=os.clock()-shakeStart
 
