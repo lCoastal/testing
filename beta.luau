@@ -416,9 +416,9 @@ local function groupBest(group,places,L,per)
                         local p=shares[q.m] or 0
                         worst=p>0 and math.max(worst,q.n/(p*per)) or math.huge
                     end
-                    if not best or worst<best.pans*(1-1e-9)
+                    if worst<math.huge and (not best or worst<best.pans*(1-1e-9)
                         or (math.abs(worst-best.pans)<=best.pans*1e-9
-                        and cap==nil and best.cap~=nil) then
+                        and cap==nil and best.cap~=nil)) then
                         best={z=z,cap=cap,pans=worst,group=group}
                     end
                 end
@@ -451,8 +451,7 @@ local function optimize(wants,places,L,cap)
     local per=math.max(1,.6779*math.max(1,cap)^.56474)
     local options={}
     for _,groups in ipairs(partitions(wants)) do
-        local stops,total,valid=true,0,true
-        stops={}
+        local stops,total,valid={},0,true
         for _,group in ipairs(groups) do
             local v=groupBest(group,places,L,per)
             if not v then valid=false;break end
@@ -576,6 +575,8 @@ local function safeDig()
     return x and unpackCF(x.dig)
 end
 local function escapeZone()
+    S.dredgeAt=nil
+    S.dredgeRiskZone=false
     local r=root();local target=safeDig()
     if r and target and (r.Position-target.Position).Magnitude>25 then
         pcall(function() r.CFrame=target end)
@@ -639,7 +640,9 @@ local function dredgeCycle(id)
     for _,w in ipairs(wants) do need[w.m]=w.n end
     local keep=false
     if S.dredgeCurrent and S.dredgeGroup and openNow(baseDrop(S.dredgeCurrent))
-        and eligible(S.dredgeCurrent,5) then
+        and eligible(S.dredgeCurrent,5)
+        and S.dredgePlanLuck and math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
+        and S.dredgePlanCapacity==capacityNow then
         for _,g in ipairs(S.dredgeGroup) do
             if (need[g.m] or 0)>0 then keep=true;break end
         end
@@ -654,6 +657,8 @@ local function dredgeCycle(id)
         local choice=plan.stops[1]
         S.dredgeCurrent=choice.z;S.dredgeGroup=choice.group
         S.dredgeTargetCap=choice.cap
+        S.dredgePlanLuck=L
+        S.dredgePlanCapacity=capacityNow
         S.dredgePlanText=string.format("%d/%d goals, ~%.0f pans",
             plan.covered,plan.needed,plan.total)
     end
@@ -989,6 +994,7 @@ stop=function()
     local hadDredge=S.dredge
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false;S.dredgeAppliedCap="UNSET"
+    S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
     if hadDredge and S.dredgeRestore then
         S.dig=S.dredgeRestore.dig;S.water=S.dredgeRestore.water
         S.activeZone=S.dredgeRestore.zone
@@ -1393,6 +1399,7 @@ local function startWorker(asDredge)
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
         dredgeButton.Text="AUTO DREDGE: ON"
         dredgeText("Starting / reading Dredge quest")
