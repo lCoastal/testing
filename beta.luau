@@ -1575,7 +1575,9 @@ local function dredgeCycle(id)
         -- zone without reintroducing cap changes every few pans.
         local oldObjectives={}
         for _,v in ipairs(S.dredgeGroup or {}) do
-            if (need[v.m] or 0)>0 then oldObjectives[#oldObjectives+1]=v.m end
+            -- Include completed objectives in the OLD signature so that
+            -- {Aetherium,Ruby} -> {Ruby} forces a cap recalibration.
+            oldObjectives[#oldObjectives+1]=v.m
         end
         local newObjectives={}
         for _,v in ipairs(choice.group or {}) do
