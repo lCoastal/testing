@@ -838,6 +838,95 @@ end
 local function farmMove(cf,id)
     return move(cf,id)
 end
+-- Sparse recorded routes can leave 100+ studs between the first
+-- checkpoint and its warp stone. Bridge short gaps by ACTUAL walking,
+-- never by CFrame jumps. This fallback is used only if Pathfinding fails.
+local function walkGroundBridge(cf,id)
+    local character=P.Character
+    local hum=character and character:FindFirstChildOfClass("Humanoid")
+    local r=root()
+    if not r or not hum or hum.Health<=0 then return false,"No character to walk" end
+    local gap=(r.Position-cf.Position).Magnitude
+    if gap>200 then return false,"Gap too large for direct bridge ("..math.floor(gap).." studs)" end
+    local deadline=os.clock()+math.clamp(gap/math.max(8,hum.WalkSpeed)*3+5,7,40)
+    local rays=RaycastParams.new()
+    rays.FilterType=Enum.RaycastFilterType.Exclude
+    rays.FilterDescendantsInstances={character}
+    local attempts=0
+    while valid(id) and os.clock()<deadline do
+        r=root()
+        if not r or hum.Health<=0 then return false,"Character unavailable" end
+        local remaining=(r.Position-cf.Position).Magnitude
+        if remaining<=10 then return true end
+        attempts+=1
+        if attempts>12 then return false,"Bridge step limit reached" end
+        local nextPos=r.Position+(cf.Position-r.Position).Unit*math.min(29,remaining)
+        local ground=workspace:Raycast(nextPos+Vector3.new(0,40,0),
+            Vector3.new(0,-120,0),rays)
+        if not ground then return false,"No ground for bridge" end
+        nextPos=ground.Position+Vector3.new(0,3,0)
+        if math.abs(nextPos.Y-r.Position.Y)>14 then
+            return false,"Steep drop/climb needs another saved checkpoint"
+        end
+        local before=remaining
+        hum:MoveTo(nextPos)
+        local stepEnd=math.min(deadline,os.clock()+4)
+        while valid(id) and os.clock()<stepEnd do
+            r=root()
+            if not r then return false,"Character disappeared" end
+            if (r.Position-nextPos).Magnitude<=7 then break end
+            task.wait(.065)
+        end
+        r=root()
+        if not r then return false,"Character disappeared" end
+        if before-(r.Position-cf.Position).Magnitude<3 then
+            return false,"Walk bridge blocked or server corrected movement"
+        end
+    end
+    return false,"Walk bridge timed out"
+end
+-- Warp models/pivots may be ABOVE the ground or not on the navmesh.
+-- Walk to a reachable point ~25-48 studs from the stone instead.
+local function approachStone(stone,id,stoneName)
+    local r=root()
+    if not r then return false,"No character" end
+    if (r.Position-stone.Position).Magnitude<=52 then
+        if stableAt(stone,id,56,.4,2) then return true end
+    end
+    local lastError="No route to stone"
+    for _,radius in ipairs({24,36,48}) do
+        if not valid(id) then return false,"Stopped" end
+        r=root()
+        if not r then return false,"Character missing" end
+        local away=Vector3.new(r.Position.X-stone.Position.X,0,
+            r.Position.Z-stone.Position.Z)
+        if away.Magnitude<.1 then away=Vector3.new(1,0,0) end
+        local pos=stone.Position+away.Unit*radius
+        local rays=RaycastParams.new()
+        rays.FilterType=Enum.RaycastFilterType.Exclude
+        rays.FilterDescendantsInstances={P.Character}
+        local ground=workspace:Raycast(pos+Vector3.new(0,65,0),
+            Vector3.new(0,-165,0),rays)
+        if ground then
+            pos=ground.Position+Vector3.new(0,3,0)
+        else
+            pos=Vector3.new(pos.X,r.Position.Y,pos.Z)
+        end
+        S.dredgeCurrentWork="Bridging to warp stone "..tostring(stoneName)
+        local destination=CFrame.new(pos)
+        local ok,why=walkRoute(destination,id,2000,true)
+        if not ok then
+            -- Navigation meshes sometimes exclude stone platforms.
+            -- For a short, walkable gap, try real MoveTo steps instead.
+            local bridged,bridgeWhy=walkGroundBridge(destination,id)
+            if not bridged then lastError=tostring(why).." / "..tostring(bridgeWhy) end
+        end
+        r=root()
+        if r and (r.Position-stone.Position).Magnitude<=56
+            and stableAt(stone,id,60,.35,1.5) then return true end
+    end
+    return false,"Could not approach warp stone: "..lastError
+end
 -- Traverse optionally recorded coarse checkpoints (stone -> dig).
 -- Reversing the same list returns the avatar to the fast-travel stone.
 local function followRoutePoints(zoneName,id,reverse)
@@ -850,9 +939,13 @@ local function followRoutePoints(zoneName,id,reverse)
             local r=root()
             if not r then return false,"Character missing" end
             if (r.Position-cf.Position).Magnitude>14 then
-                local ok,err=walkRoute(cf,id,925,true)
+                local ok,err=walkRoute(cf,id,1800,true)
                 if not ok then
-                    return false,"Route checkpoint "..index.."/"..#nodes..": "..tostring(err)
+                    local bridged,bridgeErr=walkGroundBridge(cf,id)
+                    if not bridged then
+                        return false,"Route checkpoint "..index.."/"..#nodes..": "..
+                            tostring(err).." / "..tostring(bridgeErr)
+                    end
                 end
             end
         end
@@ -869,11 +962,13 @@ local function returnToMappedStone(id)
     if not stone then return false,"Old zone waypoint missing: "..oldZone end
     local r=root()
     if not r then return false,"Character missing" end
-    if (r.Position-stone.Position).Magnitude<=65 then return true end
+    if (r.Position-stone.Position).Magnitude<=52
+        and stableAt(stone,id,60,.35,1.5) then return true end
     S.dredgeCurrentWork="Walking back to "..tostring(p.waypoint).." stone"
     local ok,err=followRoutePoints(oldZone,id,true)
     if not ok then return false,err end
-    return walkRoute(stone,id,1150)
+    -- Do not insist on walking into the stone's exact (often blocked) pivot.
+    return approachStone(stone,id,p.waypoint)
 end
 local function walkFromStoneToZone(zoneName,id)
     local p=S.presets[zoneName]
@@ -906,18 +1001,27 @@ local function goWaypoint(wp,id)
     end
     r=root()
     if not r then return false,"Character missing" end
-    local from=closestWaypoint(folder,r.Position)
+    local from=nil
+    -- After following a zone's return checkpoints, use THAT zone's mapped
+    -- stone, not whichever unrelated stone happens to be geometrically closest.
+    if oldZone then
+        local preset=S.presets[oldZone]
+        local mapped=preset and folder:FindFirstChild(preset.waypoint or "")
+        local mappedCF=mapped and getWaypointCF(mapped)
+        if mappedCF and (r.Position-mappedCF.Position).Magnitude<=65 then
+            from=mapped
+        end
+    end
+    from=from or closestWaypoint(folder,r.Position)
     if not from then return false,"No departure waypoint found" end
     local origin=getWaypointCF(from)
     if not origin then return false,"Departure waypoint has no pivot" end
-    if (r.Position-origin.Position).Magnitude>62 then
-        -- In initial startup, reach a nearby stone using NORMAL walking.
-        -- Fail rather than firing a remote from far away.
+    if (r.Position-origin.Position).Magnitude>52 then
         S.dredgeCurrentWork="Walking to departure stone "..from.Name
-        local ok,err=walkRoute(origin,id,800)
-        if not ok then return false,"Cannot walk to departure stone: "..tostring(err) end
+        local ok,err=approachStone(origin,id,from.Name)
+        if not ok then return false,"Cannot reach departure stone: "..tostring(err) end
         r=root()
-        if not r or (r.Position-origin.Position).Magnitude>75 then
+        if not r or (r.Position-origin.Position).Magnitude>65 then
             return false,"Departure stone approach did not stick"
         end
     end
