@@ -2011,7 +2011,7 @@ local function refreshPreset()
 end
 refreshPreset()
 
--- ===== COMPACT 4-TAB INTERFACE =====
+-- ===== COMPACT 5-TAB INTERFACE =====
 -- The existing farm, Dredge and preset controls are the exact same objects
 -- (and callbacks). Reparenting them keeps every existing function intact.
 local function page()
@@ -2022,13 +2022,13 @@ local function page()
         Visible=false
     },Body)
 end
-local farmPage,dredgePage,diagnosticPage,treasurePage=page(),page(),page(),page()
-local TAB_NAMES={"AUTO FARM","AUTO DREDGE","ZONE DIAG.","TREASURE"}
-local TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage}
+local farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage=page(),page(),page(),page(),page()
+local TAB_NAMES={"FARM","DREDGE","ZONE DIAG.","TREASURE","REFORGE"}
+local TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage}
 local tabButtons={}
 for i,name in ipairs(TAB_NAMES) do
-    tabButtons[i]=button(name,5+(i-1)*84,36,80,32,Body)
-    tabButtons[i].TextSize=10
+    tabButtons[i]=button(name,5+(i-1)*66,36,62,32,Body)
+    tabButtons[i].TextSize=9
 end
 local function relocate(widget,parent,x,y)
     widget.Parent=parent
@@ -2161,6 +2161,74 @@ S.treasureNote=label(
 S.treasureNote.TextWrapped=true
 relocate(S.treasureNote,treasurePage,14,70)
 
+-- Manual reforge: only the currently held, reforgeable equipment.
+-- The game exposes ReforgeEquipment as a RemoteFunction. Invoke exactly
+-- once per click; no retry loops and no automatic perfect-token consumption.
+S.reforgeTitle=label("REFORGE EQUIPPED ITEM",14,17,312,30,13,FG)
+relocate(S.reforgeTitle,reforgePage,14,17)
+S.reforgeEquipped=label("Held item: checking...",14,65,312,38,12,FG)
+relocate(S.reforgeEquipped,reforgePage,14,65)
+S.reforgeEquipped.TextWrapped=true
+S.reforgeButton=button("REFORGE HELD ITEM",14,115,312,44,reforgePage)
+S.reforgeStatus=label("One normal reforge per click. No auto-repeat.",14,179,312,77,12,MUTED)
+relocate(S.reforgeStatus,reforgePage,14,179)
+S.reforgeStatus.TextWrapped=true
+S.reforgeStatus.TextYAlignment=Enum.TextYAlignment.Top
+S.reforgeBusy=false
+
+local function heldReforgeItem()
+    local character=P.Character
+    if not character then return nil end
+    for _,obj in ipairs(character:GetChildren()) do
+        if obj:IsA("Tool") and obj:FindFirstChild("StatRolls")
+            and obj:FindFirstChild("ItemData") then
+            return obj
+        end
+    end
+    return nil
+end
+
+bind(S.reforgeButton.MouseButton1Click,function()
+    if not S.alive or S.reforgeBusy then return end
+    local item=heldReforgeItem()
+    if not item then
+        S.reforgeStatus.Text="Hold a reforgeable equipment item first (ItemData + StatRolls)."
+        return
+    end
+    local remotes=RS:FindFirstChild("Remotes")
+    local crafting=remotes and remotes:FindFirstChild("Crafting")
+    local remote=crafting and crafting:FindFirstChild("ReforgeEquipment")
+    if not remote or not remote:IsA("RemoteFunction") then
+        S.reforgeStatus.Text="ReforgeEquipment remote unavailable."
+        return
+    end
+    S.reforgeBusy=true
+    S.reforgeButton.Text="REFORGING..."
+    local name=item.Name
+    S.reforgeStatus.Text="Reforging "..name.."..."
+    S.diagEvent("REFORGE_START",name)
+    task.spawn(function()
+        local ok,result,newItem=pcall(function()
+            return remote:InvokeServer(item)
+        end)
+        if not S.alive then return end
+        local status
+        if not ok then
+            status="Reforge failed: "..tostring(result)
+        elseif result==true then
+            status="Reforged "..name.." successfully."
+        elseif typeof(newItem)=="Instance" then
+            status="Reforge returned updated equipment: "..newItem.Name
+        else
+            status="Reforge not confirmed: "..tostring(result)
+        end
+        S.reforgeStatus.Text=status
+        S.diagEvent(ok and "REFORGE_RESULT" or "REFORGE_ERROR",status)
+        S.reforgeBusy=false
+        S.reforgeButton.Text="REFORGE HELD ITEM"
+    end)
+end)
+
 local activeTab=1
 local function openTab(n)
     activeTab=n
@@ -2179,6 +2247,10 @@ openTab(1)
 -- Quest and live zone diagnostics refresh independently of farming.
 task.spawn(function()
     while S.alive do
+        if reforgePage.Visible then
+            local item=heldReforgeItem()
+            S.reforgeEquipped.Text="Held item: "..(item and item.Name or "none / not reforgeable")
+        end
         if diagnosticPage.Visible then
             local r=root()
             local pos=r and r.Position
