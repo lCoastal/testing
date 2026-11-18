@@ -832,26 +832,91 @@ local function farmMove(cf,id)
     if not arrived then warn("[GALAXIS DREDGE] Local walk failed:",tostring(err)) end
     return arrived
 end
+-- Traverse optionally recorded coarse checkpoints (stone -> dig).
+-- Reversing the same list returns the avatar to the fast-travel stone.
+local function followRoutePoints(zoneName,id,reverse)
+    local p=S.presets[zoneName]
+    local nodes=p and p.route or {}
+    for i=1,#nodes do
+        local index=reverse and (#nodes-i+1) or i
+        local cf=unpackCF(nodes[index])
+        if cf then
+            local r=root()
+            if not r then return false,"Character missing" end
+            if (r.Position-cf.Position).Magnitude>14 then
+                local ok,err=walkRoute(cf,id,925)
+                if not ok then
+                    return false,"Route checkpoint "..index.."/"..#nodes..": "..tostring(err)
+                end
+            end
+        end
+    end
+    return valid(id)
+end
+local function returnToMappedStone(id)
+    local oldZone=S.dredgeAt
+    if not oldZone then return true end
+    local p=S.presets[oldZone]
+    local folder=waypointFolder()
+    local obj=p and folder and folder:FindFirstChild(p.waypoint or "")
+    local stone=obj and getWaypointCF(obj)
+    if not stone then return false,"Old zone waypoint missing: "..oldZone end
+    local r=root()
+    if not r then return false,"Character missing" end
+    if (r.Position-stone.Position).Magnitude<=65 then return true end
+    S.dredgeCurrentWork="Walking back to "..tostring(p.waypoint).." stone"
+    local ok,err=followRoutePoints(oldZone,id,true)
+    if not ok then return false,err end
+    return walkRoute(stone,id,1150)
+end
+local function walkFromStoneToZone(zoneName,id)
+    local p=S.presets[zoneName]
+    local target=p and unpackCF(p.dig)
+    if not target then return false,"Missing dig coordinates: "..zoneName end
+    S.dredgeCurrentWork="Walking from stone to "..zoneName
+    local ok,err=followRoutePoints(zoneName,id,false)
+    if not ok then return false,err end
+    local reached,why=walkRoute(target,id,1150)
+    if not reached then return false,why end
+    if stableAt(target,id,12,1.0,3.1) then return true end
+    return false,"Reached dig position but did not stay there"
+end
 local function goWaypoint(wp,id)
     local folder=waypointFolder()
     local r=root()
     local to=folder and folder:FindFirstChild(wp or "")
     local target=to and getWaypointCF(to)
-    if not r or not target then return false,"Warp not found: "..tostring(wp) end
+    if not r or not target then return false,"Waypoint missing: "..tostring(wp) end
     if (r.Position-target.Position).Magnitude<65 then
-        return stableAt(target,id,78,.6,2)
+        return stableAt(target,id,78,1.0,2.5)
     end
+
+    -- Never fire FastTravel from the middle of a mining zone. Walk the
+    -- saved route BACK to its mapped stone, in reverse order, first.
+    local oldZone=S.dredgeAt
+    if oldZone then
+        local ok,err=returnToMappedStone(id)
+        if not ok then return false,"Could not return from "..oldZone..": "..tostring(err) end
+    end
+    r=root()
+    if not r then return false,"Character missing" end
     local from=closestWaypoint(folder,r.Position)
-    if not from then return false,"No source waypoint" end
-    -- When already closest to the desired waypoint, walking is required.
-    if from==to then return walkRoute(target,id,850) end
-    -- If the origin waypoint is nearby, approach it on foot before
-    -- requesting the game's official fast travel (no artificial speed boosts).
-    local originCF=getWaypointCF(from)
-    if originCF and (r.Position-originCF.Position).Magnitude>50
-      and (r.Position-originCF.Position).Magnitude<=170 then
-        walkRoute(originCF,id,200) -- best-effort; failure is handled by arrival verification
-        if not valid(id) then return false,"Stopped" end
+    if not from then return false,"No departure waypoint found" end
+    local origin=getWaypointCF(from)
+    if not origin then return false,"Departure waypoint has no pivot" end
+    if (r.Position-origin.Position).Magnitude>62 then
+        -- In initial startup, reach a nearby stone using NORMAL walking.
+        -- Fail rather than firing a remote from far away.
+        S.dredgeCurrentWork="Walking to departure stone "..from.Name
+        local ok,err=walkRoute(origin,id,800)
+        if not ok then return false,"Cannot walk to departure stone: "..tostring(err) end
+        r=root()
+        if not r or (r.Position-origin.Position).Magnitude>75 then
+            return false,"Departure stone approach did not stick"
+        end
+    end
+    if from==to then
+        return stableAt(target,id,78,1.0,2.7)
     end
     local rem=RS:FindFirstChild("Remotes")
     local misc=rem and rem:FindFirstChild("Misc")
@@ -859,14 +924,12 @@ local function goWaypoint(wp,id)
     if not travel or not travel:IsA("RemoteEvent") then
         return false,"FastTravel remote missing"
     end
+    S.dredgeCurrentWork="Fast Travel: "..from.Name.." -> "..wp
     if not pcall(function() travel:FireServer(from,to) end) then
         return false,"FastTravel request failed"
     end
-    if not valid(id) then return false,"Stopped" end
-    -- FireServer returning does not prove travel worked. Wait for the server
-    -- to actually place us at the destination, then check for rubber-banding.
-    if stableAt(target,id,85,1.25,6.5) then return true end
-    return false,"Waypoint arrival rejected or rubber-banded"
+    if stableAt(target,id,85,1.4,8.0) then return true end
+    return false,"Server rejected waypoint travel / pulled character back"
 end
 local function approachDredgeNPC(id)
     -- NPC proximity matters for some quests. Do not confuse a waypoint
@@ -887,7 +950,7 @@ local function approachDredgeNPC(id)
     local r=root()
     if r and (r.Position-npcCF.Position).Magnitude<=12 then return true end
     local target=npcCF*CFrame.new(0,0,5)
-    if pathTo(target,id) or move(target,id) then return true end
+    if pathTo(target,id) then return true end
     return false,"Could not approach Dredge Master NPC"
 end
 local function sendDredgeTalk(id)
@@ -896,9 +959,11 @@ local function sendDredgeTalk(id)
     if not talk or not talk:IsA("RemoteEvent") then
         return false,"QuestTalked remote unavailable"
     end
-    if not goWaypoint("Dredge Master",id) then
-        return false,"Fast Travel to Dredge Master failed"
+    local traveled,reason=goWaypoint("Dredge Master",id)
+    if not traveled then
+        return false,"Travel to Dredge Master: "..tostring(reason)
     end
+    S.dredgeAt=nil
     local ok,why=approachDredgeNPC(id)
     if not ok then return false,why end
     local sent,err=pcall(function() talk:FireServer("DredgeMaster") end)
@@ -930,7 +995,8 @@ local function handleDredgeTransition(id,mode)
         end
         S.dredgeTransitionAttempts+=1
         S.dredgeTransitionAt=os.clock()
-        S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
+        S.dredgeCurrent=nil;S.dredgeGroup=nil
+        -- Keep S.dredgeAt until we have walked BACK to the mapped stone.
         S.dredgeCapLockedZone=nil
         local ok,err=sendDredgeTalk(id)
         dredgeText(ok and
@@ -963,12 +1029,9 @@ local function safeDig()
     return x and unpackCF(x.dig)
 end
 local function escapeZone()
-    S.dredgeAt=nil
+    -- No long-range CFrame here: this was causing repeated rubber-banding.
+    -- Preserve the current zone for the route BACK to its mapped stone.
     S.dredgeRiskZone=false
-    local r=root();local target=safeDig()
-    if r and target and (r.Position-target.Position).Magnitude>25 then
-        pcall(function() r.CFrame=target end)
-    end
 end
 local function dredgeHealthWatch()
     if not S.dredge or not S.running or not S.dredgeRiskZone then return end
@@ -977,7 +1040,7 @@ local function dredgeHealthWatch()
     if h and h.Health<h.MaxHealth*.75 then
         escapeZone()
         if stop then stop() end
-        dredgeText("STOPPED: Rotwood damage! Retreated (75% HP)")
+        dredgeText("STOPPED: Rotwood HP below 75%; no forced teleport; move to safety")
     end
 end
 local function describeDredgeTargets(group,remaining)
@@ -1116,7 +1179,7 @@ local function dredgeCycle(id)
     if not p or not openNow(targetZone) then
         S.dredgeCurrent=nil;S.dredgeGroup=nil
         escapeZone()
-        dredgeText("Timed zone closed; parked in Fortune River")
+        dredgeText("Timed zone closed; waiting without forced teleport")
         return false
     end
     if S.dredgeAt~=targetZone then
@@ -1131,14 +1194,17 @@ local function dredgeCycle(id)
         local r=root()
         local closeEnough=r and (r.Position-S.dig.Position).Magnitude<165
         local arrived,why=false,nil
-        if closeEnough then arrived,why=walkRoute(S.dig,id,230) end
+        if closeEnough then
+            arrived,why=walkRoute(S.dig,id,230)
+            if arrived then arrived=stableAt(S.dig,id,12,1,3) end
+        end
         if not arrived and not S.dredgeWarped[targetZone] then
-            -- One official FastTravel request to the mapped waypoint.
-            -- We never chain short CFrame teleports around the game's checks.
+            -- One attempt: return to OLD stone via reversed checkpoints,
+            -- official game warp, then forward checkpoints into the new zone.
             S.dredgeWarped[targetZone]=true
-            dredgeText("Waypoint first: "..tostring(p.waypoint))
+            dredgeText("Following stone route: "..tostring(p.waypoint))
             local warped,err=goWaypoint(p.waypoint,id)
-            if warped then arrived,why=walkRoute(S.dig,id,1150)
+            if warped then arrived,why=walkFromStoneToZone(targetZone,id)
             else why=err end
         end
         if not arrived then
@@ -2287,7 +2353,11 @@ local function startWorker(asDredge)
                     if targetCF then
                         local r=root()
                         if r and (r.Position-targetCF.Position).Magnitude>8 then
-                            if not pathTo(targetCF,id) then move(targetCF,id) end
+                            if not farmMove(targetCF,id) then
+                                stop()
+                                dredgeText("Stopped: recovery walking route blocked at "..zoneName)
+                                break
+                            end
                         end
                     end
                     S.dredgeReadyAt=os.clock()+math.min(2.5,.65*attempts)
