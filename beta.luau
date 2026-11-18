@@ -470,11 +470,13 @@ local function farming(id,r,target)
         local function finished()
             return S.completed or (S.rewards>0 and os.clock()-S.lastReward>=CFG.rewardGap)
         end
-        -- Experimental: once at least 2 actual mineral rewards have arrived,
-        -- start traveling to sand before the reward stream settles.
-        -- No further shake packets are sent after an early teleport.
+        -- Experimental: overlap travel with the LAST part of reward settling.
+        -- Wait for a short lull (~55% of normal reward gap), rather than
+        -- teleporting at the first 2 minerals and risking the whole batch.
+        -- No additional shakes after starting the early teleport.
         local function tryEarlyMove()
             if not S.earlyTP or earlyMoved or S.completed or S.rewards<2 then return false end
+            if os.clock()-S.lastReward < CFG.rewardGap*.55 then return false end
             show("Early teleport (test)")
             local t=os.clock()
             if not move(S.dig,id) then return nil,"Early teleport failed" end
