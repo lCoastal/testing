@@ -1544,6 +1544,7 @@ dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
 local function selectedZone() return ZONE_NAMES[S.selectedZone] end
 local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local routeCountLabel
+local diagZoneName,diagSavedStatus
 local function refreshPreset()
     local name=selectedZone()
     local p=S.presets[name]
@@ -1556,6 +1557,11 @@ local function refreshPreset()
     if routeCountLabel then
         routeCountLabel.Text="Route: "..tostring(p and p.route and #p.route or 0)..
             " points (stone -> dig; reverse to return)"
+    end
+    if diagZoneName then diagZoneName.Text=name end
+    if diagSavedStatus then
+        diagSavedStatus.Text=((p and unpackCF(p.dig)) and "DIG: SAVED" or "DIG: NOT SAVED")..
+            "    |    "..((p and unpackCF(p.water)) and "WATER: SAVED" or "WATER: NOT SAVED")
     end
     -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
@@ -1617,13 +1623,28 @@ relocate(dredgeWorkLabel,dredgePage,14,309)
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
-local zoneDiagTitle=label("ZONE DIAGNOSTIC",14,12,312,23,12,FG)
-relocate(zoneDiagTitle,diagnosticPage,14,12)
-local zoneLiveInfo=label("Reading live deposit...",14,48,312,66,11,MUTED)
+local zoneDiagTitle=label("ZONE DIAGNOSTIC",14,9,312,21,12,FG)
+relocate(zoneDiagTitle,diagnosticPage,14,9)
+local zoneLiveInfo=label("Reading live deposit...",14,35,312,67,11,MUTED)
 zoneLiveInfo.TextWrapped=true
 zoneLiveInfo.TextYAlignment=Enum.TextYAlignment.Top
-relocate(zoneLiveInfo,diagnosticPage,14,48)
-local editPresets=button("EDIT ZONE PRESETS",14,124,312,36,diagnosticPage)
+relocate(zoneLiveInfo,diagnosticPage,14,35)
+
+-- Direct zone-selection and position capture; no need to open the editor.
+local diagZoneHeading=label("SAVE POSITIONS FOR ZONE",14,108,312,22,10,MUTED)
+relocate(diagZoneHeading,diagnosticPage,14,108)
+local diagPrevZone=button("<",14,134,36,32,diagnosticPage)
+diagZoneName=label(selectedZone(),56,134,228,32,12,FG)
+diagZoneName.TextXAlignment=Enum.TextXAlignment.Center
+diagZoneName.Font=Enum.Font.GothamMedium
+relocate(diagZoneName,diagnosticPage,56,134)
+local diagNextZone=button(">",290,134,36,32,diagnosticPage)
+local diagSaveDig=button("SET DIG HERE",14,176,149,36,diagnosticPage)
+local diagSaveWater=button("SET WATER HERE",177,176,149,36,diagnosticPage)
+diagSavedStatus=label("",14,218,312,32,11,MUTED)
+relocate(diagSavedStatus,diagnosticPage,14,218)
+local editPresets=button("EDIT ZONE PRESETS / WALK ROUTES",14,284,312,36,diagnosticPage)
+refreshPreset()
 local presetEditor=make("ScrollingFrame",{
     Position=UDim2.fromOffset(10,170),
     Size=UDim2.new(1,-20,1,-181),
@@ -1668,10 +1689,13 @@ relocate(routeCountLabel,presetEditor,4,425)
 refreshPreset()
 editPresets.MouseButton1Click:Connect(function()
     presetEditor.Visible=not presetEditor.Visible
-    zoneLiveInfo.Visible=not presetEditor.Visible
-    zoneDiagTitle.Visible=not presetEditor.Visible
-    editPresets.Text=presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS"
-    editPresets.Position=UDim2.fromOffset(14,presetEditor.Visible and 12 or 124)
+    local showMain=not presetEditor.Visible
+    for _,control in ipairs({zoneLiveInfo,zoneDiagTitle,diagZoneHeading,
+        diagPrevZone,diagZoneName,diagNextZone,diagSaveDig,diagSaveWater,diagSavedStatus}) do
+        control.Visible=showMain
+    end
+    editPresets.Text=presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS / WALK ROUTES"
+    editPresets.Position=UDim2.fromOffset(14,presetEditor.Visible and 12 or 284)
     presetEditor.Position=UDim2.fromOffset(10,presetEditor.Visible and 61 or 170)
     presetEditor.Size=UDim2.new(1,-20,1,presetEditor.Visible and -70 or -181)
 end)
@@ -2041,6 +2065,8 @@ local function capture(key)
 end
 bind(digB.MouseButton1Click,function() capture("dig") end)
 bind(waterB.MouseButton1Click,function() capture("water") end)
+bind(diagSaveDig.MouseButton1Click,function() capture("dig") end)
+bind(diagSaveWater.MouseButton1Click,function() capture("water") end)
 local function selectZone(i)
     S.selectedZone=(i-1)%#ZONE_NAMES+1
     local p=S.presets[selectedZone()]
@@ -2052,6 +2078,8 @@ local function selectZone(i)
 end
 bind(prevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
 bind(nextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
+bind(diagPrevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
+bind(diagNextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
 bind(prevWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=(S.selectedWaypoint-2)%#WAYPOINT_NAMES+1
     refreshPreset()
