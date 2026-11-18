@@ -299,6 +299,7 @@ S.dredgeUncappedLuck=nil;S.dredgeLuckReadyAt=0
 S.dredgeTravelFailed={};S.dredgeWarped={}
 S.dredgeReadyAt=0;S.dredgeZoneCycle=0;S.dredgeZoneSince=0
 S.dredgeFailureCount=0;S.dredgeFailureZone=nil
+S.dredgeCurrentWork="Idle";S.dredgeNextWork="Awaiting plan"
 S.dredgeCapLastAt=-math.huge;S.dredgeCapLockedZone=nil
 S.dredgeCapLockedKey=nil;S.dredgeTurnAttempts=0
 local dredgeButton,dredgeStatus,show,stop
@@ -773,6 +774,13 @@ local function sendDredgeTalk(id)
     return true
 end
 local function handleDredgeTransition(id,mode)
+    if mode=="turnin" then
+        S.dredgeCurrentWork="Talk to Dredge Master (turn-in)"
+        S.dredgeNextWork="Accept next quest"
+    elseif mode=="available" then
+        S.dredgeCurrentWork="Start Dredge quest"
+        S.dredgeNextWork="Plan mineral objectives"
+    end
     if S.dredgeTransitionMode~=mode then
         S.dredgeTransitionMode=mode
         S.dredgeTransitionAttempts=0
@@ -840,6 +848,13 @@ local function dredgeHealthWatch()
         dredgeText("STOPPED: Rotwood damage! Retreated (75% HP)")
     end
 end
+local function describeDredgeTargets(group,remaining)
+    local parts={}
+    for _,v in ipairs(group or {}) do
+        parts[#parts+1]=v.m.." ("..tostring(remaining[v.m] or 0).." left)"
+    end
+    return #parts>0 and table.concat(parts,", ") or "None"
+end
 local function dredgeCycle(id)
     if not valid(id) or not S.dredge then return false end
     dredgeHealthWatch()
@@ -856,6 +871,8 @@ local function dredgeCycle(id)
         return false
     end
     if mode=="unavailable" then
+        S.dredgeCurrentWork="Waiting for Dredge quest"
+        S.dredgeNextWork="Check quest availability"
         dredgeText("Dredge Master not offering a quest: "..tostring(status.status))
         return false
     end
@@ -870,6 +887,8 @@ local function dredgeCycle(id)
         return false
     end
     if done then
+        S.dredgeCurrentWork="Mineral collection complete"
+        S.dredgeNextWork="Turn in at Dredge Master"
         -- If the client reaches full progress a little before CanStartQuest
         -- advances to step 2, hold rather than farming useless extra pans.
         dredgeText("Collection complete; waiting for server's talk step")
@@ -932,6 +951,8 @@ local function dredgeCycle(id)
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
         if not plan or not plan.stops[1] then
+            S.dredgeCurrentWork="No accessible safe deposit"
+            S.dredgeNextWork="Wait for equipment, coordinates or opening"
             escapeZone()
             dredgeText("Waiting: missing safe zones / ring / timed opening")
             return false
@@ -945,8 +966,20 @@ local function dredgeCycle(id)
         for _,v in ipairs(wants) do S.dredgePlannedRemaining[v.m]=v.n end
         S.dredgePlanText=string.format("%d/%d goals, ~%.0f pans",
             plan.covered,plan.needed,plan.total)
+        S.dredgeNextStop=plan.stops[2]
+        S.dredgePlanCoverage=plan.covered
+        S.dredgePlanRequired=plan.needed
     end
     local targetZone=baseDrop(S.dredgeCurrent)
+    S.dredgeCurrentWork=describeDredgeTargets(S.dredgeGroup,need).." @ "..targetZone
+    if S.dredgeNextStop then
+        S.dredgeNextWork=describeDredgeTargets(S.dredgeNextStop.group,need)..
+            " @ "..baseDrop(S.dredgeNextStop.z)
+    elseif (S.dredgePlanCoverage or 0)<(S.dredgePlanRequired or 0) then
+        S.dredgeNextWork="Wait for inaccessible or timed minerals"
+    else
+        S.dredgeNextWork="Turn in Dredge quest when complete"
+    end
     local p=S.presets[targetZone]
     if not p or not openNow(targetZone) then
         S.dredgeCurrent=nil;S.dredgeGroup=nil
@@ -1365,10 +1398,14 @@ relocate(fullQualityLabel,dredgePage,14,122)
 relocate(dredgeStatus,dredgePage,14,154)
 dredgeStatus.Size=UDim2.fromOffset(312,45)
 dredgeStatus.TextWrapped=true
-local dredgeObjectiveLabel=label("Reading Dredge objectives...",14,217,312,95,11,FG)
+local dredgeObjectiveLabel=label("Reading Dredge objectives...",14,217,312,86,11,FG)
 dredgeObjectiveLabel.TextWrapped=true
 dredgeObjectiveLabel.TextYAlignment=Enum.TextYAlignment.Top
 relocate(dredgeObjectiveLabel,dredgePage,14,217)
+local dredgeWorkLabel=label("NOW: Idle\nNEXT: Waiting for quest",14,309,312,65,11,FG)
+dredgeWorkLabel.TextWrapped=true
+dredgeWorkLabel.TextYAlignment=Enum.TextYAlignment.Top
+relocate(dredgeWorkLabel,dredgePage,14,309)
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
@@ -1460,6 +1497,8 @@ task.spawn(function()
                 "\nLoaded farm zone: "..tostring(S.activeZone or "none")
         end
         if dredgePage.Visible then
+            dredgeWorkLabel.Text="NOW: "..tostring(S.dredgeCurrentWork or "Idle")..
+                "\nNEXT: "..tostring(S.dredgeNextWork or "Awaiting plan")
             local quest=getQuest()
             if quest then
                 local progress={}
@@ -1946,6 +1985,9 @@ local function startWorker(asDredge)
         S.dredgePlannedRemaining=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
         S.dredgeServerStatus=nil;S.dredgeServerProgress=nil
+        S.dredgeCurrentWork="Reading quest"
+        S.dredgeNextWork="Choose a zone and Luck Cap"
+        S.dredgeNextStop=nil
         S.dredgeNextServerPoll=0;S.dredgeQuestPollError=nil
         S.dredgePollBusy=false;S.dredgeTransitionMode=nil
         S.dredgeTransitionAttempts=0;S.dredgeTransitionAt=0
