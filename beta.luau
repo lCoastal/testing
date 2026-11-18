@@ -840,7 +840,7 @@ bind(exportPresetButton.MouseButton1Click,function()
         "An empty field means not configured. This is NOT a complete farming preset until both positions are saved.",
         "",
         "=== MINING ZONES (35) ===",
-        "Zone\\tMapped Waypoint\\tDig CFrame\\tWater CFrame"
+        "Zone\tMapped Waypoint\tDig CFrame\tWater CFrame"
     }
     local mapped,complete=0,0
     for _,name in ipairs(ZONE_NAMES) do
