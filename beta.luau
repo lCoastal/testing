@@ -824,6 +824,14 @@ local function goWaypoint(wp,id)
     if not from then return false,"No source waypoint" end
     -- When already closest to the desired waypoint, walking is required.
     if from==to then return walkRoute(target,id,850) end
+    -- If the origin waypoint is nearby, approach it on foot before
+    -- requesting the game's official fast travel (no artificial speed boosts).
+    local originCF=getWaypointCF(from)
+    if originCF and (r.Position-originCF.Position).Magnitude>50
+      and (r.Position-originCF.Position).Magnitude<=170 then
+        walkRoute(originCF,id,200) -- best-effort; failure is handled by arrival verification
+        if not valid(id) then return false,"Stopped" end
+    end
     local rem=RS:FindFirstChild("Remotes")
     local misc=rem and rem:FindFirstChild("Misc")
     local travel=misc and misc:FindFirstChild("FastTravel")
