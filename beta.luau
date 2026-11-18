@@ -50,7 +50,7 @@ local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGa
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,selling=false,doubleShake=true,
-    earlyTP=false,turbo=true,recentTimes={},totalCycleTime=0,
+    antiAfk=true,earlyTP=false,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
@@ -325,6 +325,8 @@ function S.diagReport()
         "Only local pan/position/cycle data; no remote packets or credentials.",
         "CURRENT: "..S.diagSnapshot(),
         "Last failure: "..tostring(S.diagLastFailure or "None"),
+        "Anti-AFK: "..tostring(S.antiAfk),
+        "Anti-AFK last activation: "..tostring(S.antiAfkLastAt or "None"),
         "Dig calls this pan: "..tostring(S.diagDigCalls or 0),
         "Dig stall count: "..tostring(S.diagDigStalls or 0),
         "Current task: "..tostring(S.dredgeCurrentWork),
@@ -1853,6 +1855,9 @@ relocate(statsFooter,farmPage,14,210)
 S.farmInstructions=label("Save dig and water positions in your selected zone.",14,256,312,37,11,MUTED)
 S.farmInstructions.TextWrapped=true
 relocate(S.farmInstructions,farmPage,14,256)
+-- Anti-AFK is independent of Auto Farm/Auto Dredge.
+-- Toggle lives on Auto Farm page but applies globally while Hub is open.
+S.antiAfkButton=button("ANTI-AFK: ON",14,313,312,36,farmPage)
 
 -- Auto Dredge: objective readout, safety switches, and 100%-quality model.
 relocate(dredgeButton,dredgePage,14,20)
@@ -2028,6 +2033,28 @@ show=function(t)
         end
     end
 end
+bind(S.antiAfkButton.MouseButton1Click,function()
+    S.antiAfk=not S.antiAfk
+    S.antiAfkButton.Text="ANTI-AFK: "..(S.antiAfk and "ON" or "OFF")
+    S.diagEvent("ANTI_AFK_TOGGLE",S.antiAfk and "ON" or "OFF")
+end)
+-- Idle signal only: no per-frame input, no extra farming calls.
+-- bind() tracks the connection so closing/reloading Beta disconnects it.
+bind(P.Idled,function()
+    if not S.alive or not S.antiAfk then return end
+    local ok,err=pcall(function()
+        local virtualUser=game:GetService("VirtualUser")
+        virtualUser:CaptureController()
+        virtualUser:ClickButton2(Vector2.new(0,0))
+    end)
+    if ok then
+        S.antiAfkLastAt=os.date("%Y-%m-%d %H:%M:%S")
+        S.diagEvent("ANTI_AFK_TRIGGERED","virtual right-click")
+    else
+        S.diagEvent("ANTI_AFK_FAILED",tostring(err))
+        outputWarning("anti-afk","[GALAXIS HUB BETA] Anti-AFK unavailable:",err)
+    end
+end)
 bind(S.debugReportButton.MouseButton1Click,function()
     S.diagEvent("USER_EXPORT",S.diagSnapshot())
     local report=S.diagReport()
