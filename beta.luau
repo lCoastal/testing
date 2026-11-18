@@ -54,6 +54,11 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,s
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
+local DIAG_LOG={}
+local function diagEvent(kind,detail)
+    DIAG_LOG[#DIAG_LOG+1]=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
+    if #DIAG_LOG>240 then table.remove(DIAG_LOG,1) end
+end
 E.CoastalSafeFarm=S
 -- Exact Waypoints names: saved as human-selected dig/water position presets.
 -- Only explicit LOAD PRESET changes the active farm coordinates.
@@ -289,6 +294,39 @@ local function fill(r) return tonumber(r.tool:GetAttribute("Fill")) end
 local function capacity()
     local a=P:FindFirstChild("Stats")
     return a and tonumber(a:GetAttribute("Capacity"))
+end
+local function diagSnapshot()
+    local r=root()
+    local pan=panTool()
+    local f=pan and fill(pan)
+    local cap=capacity()
+    local function distance(cf)
+        return (r and cf) and string.format("%.1f",(r.Position-cf.Position).Magnitude) or "N/A"
+    end
+    local pos=r and string.format("%.1f,%.1f,%.1f",
+        r.Position.X,r.Position.Y,r.Position.Z) or "N/A"
+    return string.format("phase=%s pan=%s fill=%s capacity=%s pos=%s distDig=%s distWater=%s dredge=%s running=%s zone=%s waiting=%s completed=%s rewards=%s cycles=%s",
+        tostring(S.diagPhase or "Idle"),tostring(pan and pan.tool.Name or "NOT EQUIPPED"),
+        tostring(f),tostring(cap),pos,distance(S.dig),distance(S.water),
+        tostring(S.dredge),tostring(S.running),
+        tostring(S.dredgeAt or S.activeZone),tostring(S.waiting),
+        tostring(S.completed),tostring(S.rewards),tostring(S.cycles))
+end
+local function diagReport()
+    local lines={
+        "GALAXIS HUB DEBUG REPORT",
+        "Generated: "..os.date("%Y-%m-%d %H:%M:%S"),
+        "Only local pan/position/cycle data; no remote packets or credentials.",
+        "CURRENT: "..diagSnapshot(),
+        "Last failure: "..tostring(S.diagLastFailure or "None"),
+        "Current task: "..tostring(S.dredgeCurrentWork),
+        "Next task: "..tostring(S.dredgeNextWork),
+        "Quest status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status),
+        "Quest step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step),
+        "RECENT EVENTS:"
+    }
+    for _,line in ipairs(DIAG_LOG) do lines[#lines+1]=line end
+    return table.concat(lines,"\n").."\n"
 end
 local function pause(sec,id,ready)
     local deadline=os.clock()+sec
@@ -1753,6 +1791,8 @@ local diagSaveDig=button("SET DIG HERE",14,176,149,36,diagnosticPage)
 local diagSaveWater=button("SET WATER HERE",177,176,149,36,diagnosticPage)
 diagSavedStatus=label("",14,218,312,32,11,MUTED)
 relocate(diagSavedStatus,diagnosticPage,14,218)
+local debugReportButton=button("COPY DEBUG REPORT",14,252,312,28,diagnosticPage)
+debugReportButton.TextSize=11
 local editPresets=button("EDIT ZONE PRESETS / WALK ROUTES",14,284,312,36,diagnosticPage)
 refreshPreset()
 local presetEditor=make("ScrollingFrame",{
@@ -1801,7 +1841,8 @@ editPresets.MouseButton1Click:Connect(function()
     presetEditor.Visible=not presetEditor.Visible
     local showMain=not presetEditor.Visible
     for _,control in ipairs({zoneLiveInfo,zoneDiagTitle,diagZoneHeading,
-        diagPrevZone,diagZoneName,diagNextZone,diagSaveDig,diagSaveWater,diagSavedStatus}) do
+        diagPrevZone,diagZoneName,diagNextZone,diagSaveDig,diagSaveWater,diagSavedStatus,
+        debugReportButton}) do
         control.Visible=showMain
     end
     editPresets.Text=presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS / WALK ROUTES"
@@ -1875,7 +1916,26 @@ task.spawn(function()
     end
 end)
 
-show=function(t) if S.alive then status.Text=t end end
+show=function(t)
+    if S.alive then
+        status.Text=t
+        if S.diagPhase~=t then
+            S.diagPhase=t
+            diagEvent("PHASE",t)
+        end
+    end
+end
+bind(debugReportButton.MouseButton1Click,function()
+    diagEvent("USER_EXPORT",diagSnapshot())
+    local report=diagReport()
+    local saved,copied=false,false
+    if type(writefile)=="function" then
+        saved=pcall(writefile,"GalaxisHub_DebugReport.txt",report)
+    end
+    if type(setclipboard)=="function" then copied=pcall(setclipboard,report) end
+    show("Debug "..(copied and "COPIED" or "not copied")..
+        " | TXT "..(saved and "saved" or "unavailable"))
+end)
 local function xyz(cf)
     local p=cf.Position
     return string.format("%.1f, %.1f, %.1f",p.X,p.Y,p.Z)
@@ -1886,12 +1946,17 @@ task.spawn(function()
         local collected=L.minerals+#L.pending
         local avg=S.cycles>0 and string.format("%.2fs",S.totalCycleTime/S.cycles) or "--"
         statsFooter.Text=string.format("Pan: %d  |  Minerals: %d  |  Avg: %s",currentPan,collected,avg)
+        if S.running and os.clock()-(S.diagSampleAt or 0)>=1 then
+            S.diagSampleAt=os.clock()
+            diagEvent("SAMPLE",diagSnapshot())
+        end
         task.wait(.25)
     end
 end)
 
 stop=function()
     if not S.alive then return end
+    diagEvent("STOP",diagSnapshot())
     local hadDredge=S.dredge
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false
@@ -2010,7 +2075,10 @@ local function farming(id,r,target)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
             local ok=invoke(r.dig,id,1)
-            if not ok then return "Collect failed" end
+            if not ok then
+                diagEvent("COLLECT_CALL_FAILED",diagSnapshot())
+                return "Collect failed"
+            end
             -- InvokeServer already waits for a server reply. On acknowledged
             -- Fill progress, go straight to the next Collect with no extra sleep.
             -- Only back off when replication/progress has not caught up.
@@ -2023,7 +2091,10 @@ local function farming(id,r,target)
             if os.clock()-lastProgress>CFG.digStall then return "Digging stalled" end
         end
         if not valid(id) then return end
-        if (fill(r) or 0)<target-.01 then return "Pan not full" end
+        if (fill(r) or 0)<target-.01 then
+            diagEvent("PAN_NOT_FULL",diagSnapshot())
+            return "Pan not full"
+        end
         if S.dredge then
             -- Fill is already replicated; a short confirmation is enough.
             if not pause(.08,id) then return end
@@ -2045,8 +2116,12 @@ local function farming(id,r,target)
         for _=1,15 do
             if not valid(id) then return end
             local ok,result=invoke(r.pan,id)
-            if not ok then return "Pan call failed" end
+            if not ok then
+                diagEvent("PAN_CALL_FAILED",diagSnapshot())
+                return "Pan call failed"
+            end
             if result==true then accepted=true;break end
+            diagEvent("PAN_REJECT","response="..tostring(result).." | "..diagSnapshot())
             if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
@@ -2114,7 +2189,10 @@ local function farming(id,r,target)
                 task.wait(.02)
             end
         end
-        if not done then return "No completion detected" end
+        if not done then
+            diagEvent("NO_COMPLETION",diagSnapshot())
+            return "No completion detected"
+        end
         if not valid(id) then return end
         if S.dredge and S.completed then
             -- One short grace period after the authoritative completion event.
@@ -2434,6 +2512,7 @@ local function startWorker(asDredge)
         S.dredge=false
     end
     S.running=true
+    diagEvent("START",asDredge and "AUTO DREDGE" or "AUTO FARM")
     S.token+=1
     local id=S.token
     farmB.Text="AUTO FARM: ON"
@@ -2473,6 +2552,8 @@ local function startWorker(asDredge)
             S.waiting=false
 
             if valid(id) then
+                S.diagLastFailure=tostring(reason)
+                diagEvent("RECOVERY",tostring(reason).." | "..diagSnapshot())
                 if S.dredge and S.dredgeAt then
                     local zoneName=S.dredgeAt
                     if S.dredgeFailureZone~=zoneName then
