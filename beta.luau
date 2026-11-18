@@ -54,10 +54,10 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,s
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
-local DIAG_LOG={}
-local function diagEvent(kind,detail)
-    DIAG_LOG[#DIAG_LOG+1]=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
-    if #DIAG_LOG>240 then table.remove(DIAG_LOG,1) end
+S.DIAG_LOG={}
+function S.diagEvent(kind,detail)
+    S.DIAG_LOG[#S.DIAG_LOG+1]=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
+    if #S.DIAG_LOG>240 then table.remove(S.DIAG_LOG,1) end
 end
 E.CoastalSafeFarm=S
 -- Exact Waypoints names: saved as human-selected dig/water position presets.
@@ -295,7 +295,7 @@ local function capacity()
     local a=P:FindFirstChild("Stats")
     return a and tonumber(a:GetAttribute("Capacity"))
 end
-local function diagSnapshot()
+function S.diagSnapshot()
     local r=root()
     local pan=panTool()
     local f=pan and fill(pan)
@@ -312,12 +312,12 @@ local function diagSnapshot()
         tostring(S.dredgeAt or S.activeZone),tostring(S.waiting),
         tostring(S.completed),tostring(S.rewards),tostring(S.cycles))
 end
-local function diagReport()
+function S.diagReport()
     local lines={
         "GALAXIS HUB DEBUG REPORT",
         "Generated: "..os.date("%Y-%m-%d %H:%M:%S"),
         "Only local pan/position/cycle data; no remote packets or credentials.",
-        "CURRENT: "..diagSnapshot(),
+        "CURRENT: "..S.diagSnapshot(),
         "Last failure: "..tostring(S.diagLastFailure or "None"),
         "Current task: "..tostring(S.dredgeCurrentWork),
         "Next task: "..tostring(S.dredgeNextWork),
@@ -325,7 +325,7 @@ local function diagReport()
         "Quest step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step),
         "RECENT EVENTS:"
     }
-    for _,line in ipairs(DIAG_LOG) do lines[#lines+1]=line end
+    for _,line in ipairs(S.DIAG_LOG) do lines[#lines+1]=line end
     return table.concat(lines,"\n").."\n"
 end
 local function pause(sec,id,ready)
@@ -1747,9 +1747,9 @@ relocate(waterXYZ,farmPage,177,61)
 relocate(sellB,farmPage,14,101)
 relocate(farmB,farmPage,14,151)
 relocate(statsFooter,farmPage,14,210)
-local farmInstructions=label("Save dig and water positions in your selected zone.",14,256,312,37,11,MUTED)
-farmInstructions.TextWrapped=true
-relocate(farmInstructions,farmPage,14,256)
+S.farmInstructions=label("Save dig and water positions in your selected zone.",14,256,312,37,11,MUTED)
+S.farmInstructions.TextWrapped=true
+relocate(S.farmInstructions,farmPage,14,256)
 
 -- Auto Dredge: objective readout, safety switches, and 100%-quality model.
 relocate(dredgeButton,dredgePage,14,20)
@@ -1771,31 +1771,31 @@ relocate(dredgeWorkLabel,dredgePage,14,309)
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
-local zoneDiagTitle=label("ZONE DIAGNOSTIC",14,9,312,21,12,FG)
-relocate(zoneDiagTitle,diagnosticPage,14,9)
-local zoneLiveInfo=label("Reading live deposit...",14,35,312,67,11,MUTED)
-zoneLiveInfo.TextWrapped=true
-zoneLiveInfo.TextYAlignment=Enum.TextYAlignment.Top
-relocate(zoneLiveInfo,diagnosticPage,14,35)
+S.zoneDiagTitle=label("ZONE DIAGNOSTIC",14,9,312,21,12,FG)
+relocate(S.zoneDiagTitle,diagnosticPage,14,9)
+S.zoneLiveInfo=label("Reading live deposit...",14,35,312,67,11,MUTED)
+S.zoneLiveInfo.TextWrapped=true
+S.zoneLiveInfo.TextYAlignment=Enum.TextYAlignment.Top
+relocate(S.zoneLiveInfo,diagnosticPage,14,35)
 
 -- Direct zone-selection and position capture; no need to open the editor.
-local diagZoneHeading=label("SAVE POSITIONS FOR ZONE",14,108,312,22,10,MUTED)
-relocate(diagZoneHeading,diagnosticPage,14,108)
-local diagPrevZone=button("<",14,134,36,32,diagnosticPage)
+S.diagZoneHeading=label("SAVE POSITIONS FOR ZONE",14,108,312,22,10,MUTED)
+relocate(S.diagZoneHeading,diagnosticPage,14,108)
+S.diagPrevZone=button("<",14,134,36,32,diagnosticPage)
 diagZoneName=label(selectedZone(),56,134,228,32,12,FG)
 diagZoneName.TextXAlignment=Enum.TextXAlignment.Center
 diagZoneName.Font=Enum.Font.GothamMedium
 relocate(diagZoneName,diagnosticPage,56,134)
-local diagNextZone=button(">",290,134,36,32,diagnosticPage)
-local diagSaveDig=button("SET DIG HERE",14,176,149,36,diagnosticPage)
-local diagSaveWater=button("SET WATER HERE",177,176,149,36,diagnosticPage)
+S.diagNextZone=button(">",290,134,36,32,diagnosticPage)
+S.diagSaveDig=button("SET DIG HERE",14,176,149,36,diagnosticPage)
+S.diagSaveWater=button("SET WATER HERE",177,176,149,36,diagnosticPage)
 diagSavedStatus=label("",14,218,312,32,11,MUTED)
 relocate(diagSavedStatus,diagnosticPage,14,218)
-local debugReportButton=button("COPY DEBUG REPORT",14,252,312,28,diagnosticPage)
-debugReportButton.TextSize=11
-local editPresets=button("EDIT ZONE PRESETS / WALK ROUTES",14,284,312,36,diagnosticPage)
+S.debugReportButton=button("COPY DEBUG REPORT",14,252,312,28,diagnosticPage)
+S.debugReportButton.TextSize=11
+S.editPresets=button("EDIT ZONE PRESETS / WALK ROUTES",14,284,312,36,diagnosticPage)
 refreshPreset()
-local presetEditor=make("ScrollingFrame",{
+S.presetEditor=make("ScrollingFrame",{
     Position=UDim2.fromOffset(10,170),
     Size=UDim2.new(1,-20,1,-181),
     BackgroundTransparency=1,
@@ -1805,60 +1805,60 @@ local presetEditor=make("ScrollingFrame",{
     ScrollingDirection=Enum.ScrollingDirection.Y,
     Visible=false
 },diagnosticPage)
-relocate(zoneTitle,presetEditor,4,5)
-relocate(prevZone,presetEditor,4,27)
-relocate(zoneName,presetEditor,46,27)
-relocate(nextZone,presetEditor,280,27)
-relocate(warpTitle,presetEditor,4,67)
-relocate(prevWaypoint,presetEditor,4,89)
-relocate(waypointName,presetEditor,46,89)
-relocate(nextWaypoint,presetEditor,280,89)
-relocate(loadZone,presetEditor,4,133)
-relocate(mapWaypoint,presetEditor,167,133)
-relocate(travelWaypoint,presetEditor,4,176)
-relocate(importLegacy,presetEditor,167,176)
-relocate(presetStatus,presetEditor,4,220)
-relocate(presetHint,presetEditor,4,249)
-relocate(exportPresetButton,presetEditor,4,286)
+relocate(zoneTitle,S.presetEditor,4,5)
+relocate(prevZone,S.presetEditor,4,27)
+relocate(zoneName,S.presetEditor,46,27)
+relocate(nextZone,S.presetEditor,280,27)
+relocate(warpTitle,S.presetEditor,4,67)
+relocate(prevWaypoint,S.presetEditor,4,89)
+relocate(waypointName,S.presetEditor,46,89)
+relocate(nextWaypoint,S.presetEditor,280,89)
+relocate(loadZone,S.presetEditor,4,133)
+relocate(mapWaypoint,S.presetEditor,167,133)
+relocate(travelWaypoint,S.presetEditor,4,176)
+relocate(importLegacy,S.presetEditor,167,176)
+relocate(presetStatus,S.presetEditor,4,220)
+relocate(presetHint,S.presetEditor,4,249)
+relocate(exportPresetButton,S.presetEditor,4,286)
 -- Fit inherited button positions into the 320 px-wide scroll panel.
 loadZone.Size=UDim2.fromOffset(149,36)
 mapWaypoint.Size=UDim2.fromOffset(149,36)
 travelWaypoint.Size=UDim2.fromOffset(149,36)
 importLegacy.Size=UDim2.fromOffset(149,36)
 exportPresetButton.Size=UDim2.fromOffset(312,35)
-local morePresetHelp=label(
+S.morePresetHelp=label(
     "Controls preserved for editing, importing, exporting and traveling.",
     4,334,300,40,10,MUTED)
-morePresetHelp.TextWrapped=true
-relocate(morePresetHelp,presetEditor,4,334)
-local addWalkPoint=button("ADD WALK POINT",4,382,149,34,presetEditor)
-local clearWalkRoute=button("CLEAR WALK ROUTE",167,382,149,34,presetEditor)
+S.morePresetHelp.TextWrapped=true
+relocate(S.morePresetHelp,S.presetEditor,4,334)
+S.addWalkPoint=button("ADD WALK POINT",4,382,149,34,S.presetEditor)
+S.clearWalkRoute=button("CLEAR WALK ROUTE",167,382,149,34,S.presetEditor)
 routeCountLabel=label("Route: 0 points (stone -> dig)",4,425,306,40,10,MUTED)
 routeCountLabel.TextWrapped=true
-relocate(routeCountLabel,presetEditor,4,425)
+relocate(routeCountLabel,S.presetEditor,4,425)
 refreshPreset()
-editPresets.MouseButton1Click:Connect(function()
-    presetEditor.Visible=not presetEditor.Visible
-    local showMain=not presetEditor.Visible
-    for _,control in ipairs({zoneLiveInfo,zoneDiagTitle,diagZoneHeading,
-        diagPrevZone,diagZoneName,diagNextZone,diagSaveDig,diagSaveWater,diagSavedStatus,
-        debugReportButton}) do
+S.editPresets.MouseButton1Click:Connect(function()
+    S.presetEditor.Visible=not S.presetEditor.Visible
+    local showMain=not S.presetEditor.Visible
+    for _,control in ipairs({S.zoneLiveInfo,S.zoneDiagTitle,S.diagZoneHeading,
+        S.diagPrevZone,diagZoneName,S.diagNextZone,S.diagSaveDig,S.diagSaveWater,diagSavedStatus,
+        S.debugReportButton}) do
         control.Visible=showMain
     end
-    editPresets.Text=presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS / WALK ROUTES"
-    editPresets.Position=UDim2.fromOffset(14,presetEditor.Visible and 12 or 284)
-    presetEditor.Position=UDim2.fromOffset(10,presetEditor.Visible and 61 or 170)
-    presetEditor.Size=UDim2.new(1,-20,1,presetEditor.Visible and -70 or -181)
+    S.editPresets.Text=S.presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS / WALK ROUTES"
+    S.editPresets.Position=UDim2.fromOffset(14,S.presetEditor.Visible and 12 or 284)
+    S.presetEditor.Position=UDim2.fromOffset(10,S.presetEditor.Visible and 61 or 170)
+    S.presetEditor.Size=UDim2.new(1,-20,1,S.presetEditor.Visible and -70 or -181)
 end)
 
 -- Treasure maps intentionally have no automation yet.
-local treasureTitle=label("AUTO TREASURE MAP",14,23,312,32,13,FG)
-relocate(treasureTitle,treasurePage,14,23)
-local treasureNote=label(
+S.treasureTitle=label("AUTO TREASURE MAP",14,23,312,32,13,FG)
+relocate(S.treasureTitle,treasurePage,14,23)
+S.treasureNote=label(
     "Coming later. No treasure map remotes are being fired.",
     14,70,312,62,12,MUTED)
-treasureNote.TextWrapped=true
-relocate(treasureNote,treasurePage,14,70)
+S.treasureNote.TextWrapped=true
+relocate(S.treasureNote,treasurePage,14,70)
 
 local activeTab=1
 local function openTab(n)
@@ -1881,7 +1881,7 @@ task.spawn(function()
         if diagnosticPage.Visible then
             local r=root()
             local pos=r and r.Position
-            zoneLiveInfo.Text="Current deposit: "..tostring(zone())..
+            S.zoneLiveInfo.Text="Current deposit: "..tostring(zone())..
                 "\nCharacter: "..(pos and string.format("%.1f, %.1f, %.1f",pos.X,pos.Y,pos.Z) or "not spawned")..
                 "\nLoaded farm zone: "..tostring(S.activeZone or "none")
         end
@@ -1921,13 +1921,13 @@ show=function(t)
         status.Text=t
         if S.diagPhase~=t then
             S.diagPhase=t
-            diagEvent("PHASE",t)
+            S.diagEvent("PHASE",t)
         end
     end
 end
-bind(debugReportButton.MouseButton1Click,function()
-    diagEvent("USER_EXPORT",diagSnapshot())
-    local report=diagReport()
+bind(S.debugReportButton.MouseButton1Click,function()
+    S.diagEvent("USER_EXPORT",S.diagSnapshot())
+    local report=S.diagReport()
     local saved,copied=false,false
     if type(writefile)=="function" then
         saved=pcall(writefile,"GalaxisHub_DebugReport.txt",report)
@@ -1948,7 +1948,7 @@ task.spawn(function()
         statsFooter.Text=string.format("Pan: %d  |  Minerals: %d  |  Avg: %s",currentPan,collected,avg)
         if S.running and os.clock()-(S.diagSampleAt or 0)>=1 then
             S.diagSampleAt=os.clock()
-            diagEvent("SAMPLE",diagSnapshot())
+            S.diagEvent("SAMPLE",S.diagSnapshot())
         end
         task.wait(.25)
     end
@@ -1956,7 +1956,7 @@ end)
 
 stop=function()
     if not S.alive then return end
-    diagEvent("STOP",diagSnapshot())
+    S.diagEvent("STOP",S.diagSnapshot())
     local hadDredge=S.dredge
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false
@@ -2076,7 +2076,7 @@ local function farming(id,r,target)
             if before>=target-.01 then break end
             local ok=invoke(r.dig,id,1)
             if not ok then
-                diagEvent("COLLECT_CALL_FAILED",diagSnapshot())
+                S.diagEvent("COLLECT_CALL_FAILED",S.diagSnapshot())
                 return "Collect failed"
             end
             -- InvokeServer already waits for a server reply. On acknowledged
@@ -2092,7 +2092,7 @@ local function farming(id,r,target)
         end
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then
-            diagEvent("PAN_NOT_FULL",diagSnapshot())
+            S.diagEvent("PAN_NOT_FULL",S.diagSnapshot())
             return "Pan not full"
         end
         if S.dredge then
@@ -2117,11 +2117,11 @@ local function farming(id,r,target)
             if not valid(id) then return end
             local ok,result=invoke(r.pan,id)
             if not ok then
-                diagEvent("PAN_CALL_FAILED",diagSnapshot())
+                S.diagEvent("PAN_CALL_FAILED",S.diagSnapshot())
                 return "Pan call failed"
             end
             if result==true then accepted=true;break end
-            diagEvent("PAN_REJECT","response="..tostring(result).." | "..diagSnapshot())
+            S.diagEvent("PAN_REJECT","response="..tostring(result).." | "..S.diagSnapshot())
             if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
@@ -2190,7 +2190,7 @@ local function farming(id,r,target)
             end
         end
         if not done then
-            diagEvent("NO_COMPLETION",diagSnapshot())
+            S.diagEvent("NO_COMPLETION",S.diagSnapshot())
             return "No completion detected"
         end
         if not valid(id) then return end
@@ -2254,8 +2254,8 @@ local function capture(key)
 end
 bind(digB.MouseButton1Click,function() capture("dig") end)
 bind(waterB.MouseButton1Click,function() capture("water") end)
-bind(diagSaveDig.MouseButton1Click,function() capture("dig") end)
-bind(diagSaveWater.MouseButton1Click,function() capture("water") end)
+bind(S.diagSaveDig.MouseButton1Click,function() capture("dig") end)
+bind(S.diagSaveWater.MouseButton1Click,function() capture("water") end)
 local function selectZone(i)
     S.selectedZone=(i-1)%#ZONE_NAMES+1
     local p=S.presets[selectedZone()]
@@ -2267,8 +2267,8 @@ local function selectZone(i)
 end
 bind(prevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
 bind(nextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
-bind(diagPrevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
-bind(diagNextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
+bind(S.diagPrevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
+bind(S.diagNextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
 bind(prevWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=(S.selectedWaypoint-2)%#WAYPOINT_NAMES+1
     refreshPreset()
@@ -2279,7 +2279,7 @@ bind(nextWaypoint.MouseButton1Click,function()
     refreshPreset()
     savePresets()
 end)
-bind(addWalkPoint.MouseButton1Click,function()
+bind(S.addWalkPoint.MouseButton1Click,function()
     if S.running then show("Stop the farm before recording a route");return end
     local r=root()
     if not r then show("Character position unavailable");return end
@@ -2309,7 +2309,7 @@ bind(addWalkPoint.MouseButton1Click,function()
     show(ok and ("Saved walk point "..#newRoute.." for "..name) or
         ("Route saved only in session: "..tostring(err)))
 end)
-bind(clearWalkRoute.MouseButton1Click,function()
+bind(S.clearWalkRoute.MouseButton1Click,function()
     if S.running then show("Stop the farm before changing routes");return end
     local name=selectedZone()
     S.presets[name]=S.presets[name] or {}
@@ -2512,7 +2512,7 @@ local function startWorker(asDredge)
         S.dredge=false
     end
     S.running=true
-    diagEvent("START",asDredge and "AUTO DREDGE" or "AUTO FARM")
+    S.diagEvent("START",asDredge and "AUTO DREDGE" or "AUTO FARM")
     S.token+=1
     local id=S.token
     farmB.Text="AUTO FARM: ON"
@@ -2553,7 +2553,7 @@ local function startWorker(asDredge)
 
             if valid(id) then
                 S.diagLastFailure=tostring(reason)
-                diagEvent("RECOVERY",tostring(reason).." | "..diagSnapshot())
+                S.diagEvent("RECOVERY",tostring(reason).." | "..S.diagSnapshot())
                 if S.dredge and S.dredgeAt then
                     local zoneName=S.dredgeAt
                     if S.dredgeFailureZone~=zoneName then
