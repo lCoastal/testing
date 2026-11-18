@@ -1,4 +1,4 @@
--- COASTAL PROSPECTING | BETA
+-- COASTAL PROSPECTING | BETA EXPERIMENTAL EARLY TP + PROFILER
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
 -- Close button stops loops, disconnects listeners, flushes pending log entries.
@@ -13,7 +13,7 @@ end
 if E.StopUniversalLogger then pcall(E.StopUniversalLogger) end
 
 -- New timestamped .txt file on EVERY launch; never overwrite previous runs.
-local BASE="Prospecting_Universal_Logger_Zone_"..os.date("%Y-%m-%d_%H-%M-%S")
+local BASE=os.date("%H-%M-%S")
 local FILE=BASE..".txt"
 local function fileExists(path)
     if type(isfile)=="function" then
@@ -33,6 +33,7 @@ end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
 local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
 local S={alive=true,running=false,testing=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
+    earlyTP=false,recentTimes={},
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
@@ -289,8 +290,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,408),
-    Position=UDim2.new(.5,-170,.5,-204),
+    Size=UDim2.fromOffset(340,493),
+    Position=UDim2.new(.5,-170,.5,-246),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -341,6 +342,9 @@ local cap=rounded(make("TextBox",{
 },Body))
 local logStatus=label("Logger: starting...",14,320,312,20,11,MUTED)
 local zoneStatus=label("Zone: "..zone(),14,342,312,20,11,MUTED)
+local earlyB=button("EARLY TP: OFF (EXPERIMENT)",14,367,312,34,Body)
+local perfStatus=label("Last cycle: --",14,408,312,37,11,MUTED)
+perfStatus.TextWrapped=true
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -422,6 +426,7 @@ local function autoSell(id,cycle)
 end
 local function farming(id,r,target)
     while valid(id) do
+        local cycleStart=os.clock()
         show("Digging")
         if not move(S.dig,id) then return "Dig teleport failed" end
         local lastProgress=os.clock()
@@ -439,9 +444,14 @@ local function farming(id,r,target)
         end
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then return "Pan not full" end
+        local digTime=os.clock()-cycleStart
+
         show("Panning")
+        local waterStart=os.clock()
         if not move(S.water,id) then return "Water teleport failed" end
+        local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
+        local panStart=os.clock()
         local accepted=false
         for _=1,15 do
             if not valid(id) then return end
@@ -451,27 +461,52 @@ local function farming(id,r,target)
             if not pause(CFG.panRetry,id) then return end
         end
         if not accepted then return "Pan rejected" end
+        local panTime=os.clock()-panStart
+
         show("Shaking")
+        local shakeStart=os.clock()
+        local earlyMoved=false
+        local earlyTime=0
         local function finished()
             return S.completed or (S.rewards>0 and os.clock()-S.lastReward>=CFG.rewardGap)
         end
+        -- Experimental: once at least 2 actual mineral rewards have arrived,
+        -- start traveling to sand before the reward stream settles.
+        -- No further shake packets are sent after an early teleport.
+        local function tryEarlyMove()
+            if not S.earlyTP or earlyMoved or S.completed or S.rewards<2 then return false end
+            show("Early teleport (test)")
+            local t=os.clock()
+            if not move(S.dig,id) then return nil,"Early teleport failed" end
+            earlyTime=os.clock()-t
+            earlyMoved=true
+            return true
+        end
+
         local done=false
         for _=1,CFG.maxShake do
             if not valid(id) then return end
             if finished() then done=true;break end
+            local jumped,err=tryEarlyMove()
+            if err then return err end
+            if jumped then break end
+
             local ok=pcall(function() r.shake:FireServer() end)
             if not ok then return "Shake failed" end
             if S.doubleShake then
                 if not pause(CFG.shakeGap,id,finished) then return end
-                if not finished() then
-                    ok=pcall(function() r.shake:FireServer() end)
-                    if not ok then return "Shake failed" end
-                end
+                if finished() then done=true;break end
+                jumped,err=tryEarlyMove()
+                if err then return err end
+                if jumped then break end
+                ok=pcall(function() r.shake:FireServer() end)
+                if not ok then return "Shake failed" end
             end
             if not pause(CFG.shake,id,finished) then return end
         end
+
         if not done then
-            local deadline=os.clock()+1.5
+            local deadline=os.clock()+(earlyMoved and 3 or 1.5)
             while valid(id) and os.clock()<deadline do
                 if finished() then done=true;break end
                 task.wait(.02)
@@ -479,9 +514,23 @@ local function farming(id,r,target)
         end
         if not done then return "No completion detected" end
         if not valid(id) then return end
+        local shakeTime=os.clock()-shakeStart
+
         S.waiting=false
         S.cycles+=1
-        count.Text=S.cycles.." completed pans"
+        local total=os.clock()-cycleStart
+        local recent=S.recentTimes
+        recent[#recent+1]=total
+        if #recent>10 then table.remove(recent,1) end
+        local sum=0
+        for _,v in ipairs(recent) do sum+=v end
+        local ppm=sum>0 and (60*#recent/sum) or 0
+        count.Text=string.format("%d completed pans | %.1f/min",S.cycles,ppm)
+        perfStatus.Text=string.format(
+            "Last %.2fs | Dig %.2fs | Water %.2fs | Pan %.2fs\nShake+wait %.2fs | Early TP %s (%.2fs) | Avg %d",
+            total,digTime,waterTime,panTime,shakeTime,
+            earlyMoved and "YES" or "NO",earlyTime,#recent
+        )
         autoSell(id,S.cycles)
     end
 end
@@ -519,6 +568,12 @@ bind(shakeB.MouseButton1Click,function()
     S.doubleShake=not S.doubleShake
     shakeB.Text="DOUBLE SHAKE: "..(S.doubleShake and "ON" or "OFF")
 end)
+bind(earlyB.MouseButton1Click,function()
+    S.earlyTP=not S.earlyTP
+    S.recentTimes={}
+    earlyB.Text="EARLY TP: "..(S.earlyTP and "ON (EXPERIMENT)" or "OFF (EXPERIMENT)")
+    perfStatus.Text="Speed sample reset: measure 10 pans for comparison"
+end)
 bind(startB.MouseButton1Click,function()
     if S.running or S.testing then return end
     if not S.dig or not S.water then show("Save both positions");return end
@@ -549,7 +604,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,408)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,493)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
