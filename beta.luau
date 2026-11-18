@@ -323,6 +323,13 @@ function S.diagReport()
         "Next task: "..tostring(S.dredgeNextWork),
         "Quest status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status),
         "Quest step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step),
+        "Quest poll busy: "..tostring(S.dredgePollBusy),
+        "Quest poll error: "..tostring(S.dredgeQuestPollError),
+        "Quest poll attempts: "..tostring(S.dredgePollAttempts or 0),
+        "Quest poll started: "..tostring(S.dredgePollStartedAt),
+        "Quest poll ended: "..tostring(S.dredgePollCompletedAt),
+        "Dredge initialization age (s): "..tostring(
+            S.dredgeInitAt and math.floor(os.clock()-S.dredgeInitAt) or "N/A"),
         "RECENT EVENTS:"
     }
     for _,line in ipairs(S.DIAG_LOG) do lines[#lines+1]=line end
@@ -708,11 +715,26 @@ local function queryQuestStatus(id)
     if not quest or not fn or not fn:IsA("RemoteFunction") then
         return nil,"CanStartQuest remote or quest definition missing"
     end
-    local ok,canStart,status,step=pcall(function()
-        return fn:InvokeServer(quest)
+    -- InvokeServer can yield indefinitely during lag, or when this
+    -- particular server-side handler stops responding. Never hold the
+    -- only Dredge polling worker hostage to one such request.
+    local finished,ok,canStart,status,step=false,false,nil,nil,nil
+    task.spawn(function()
+        ok,canStart,status,step=pcall(function()
+            return fn:InvokeServer(quest)
+        end)
+        finished=true
     end)
-    if not ok then return nil,"CanStartQuest: "..tostring(canStart) end
+    local deadline=os.clock()+4
+    while valid(id) and not finished and os.clock()<deadline do
+        task.wait(.05)
+    end
     if not valid(id) then return nil,"Dredge stopped" end
+    if not finished then return nil,"CanStartQuest timed out after 4 seconds" end
+    if not ok then return nil,"CanStartQuest: "..tostring(canStart) end
+    if canStart==nil and status==nil and step==nil then
+        return nil,"CanStartQuest returned no status"
+    end
     local result={canStart=canStart,status=status,step=tonumber(step),time=os.clock()}
     return result
 end
@@ -721,9 +743,12 @@ local function refreshDredgeServerQuest(id)
     if not valid(id) then return end
     if not state then
         S.dredgeQuestPollError=err
+        S.diagEvent("QUEST_POLL_ERROR",tostring(err))
         return
     end
     S.dredgeQuestPollError=nil
+    S.diagEvent("QUEST_STATUS","canStart="..tostring(state.canStart)..
+        " status="..tostring(state.status).." step="..tostring(state.step))
     local old=S.dredgeServerStatus
     S.dredgeServerStatus=state
     if not old or old.status~=state.status or old.step~=state.step
@@ -736,7 +761,9 @@ local function refreshDredgeServerQuest(id)
         local qr=questsRemote()
         local fn=qr and qr:FindFirstChild("GetCurrentQuestStep")
         if fn and fn:IsA("RemoteFunction") then
-            local ok,result=pcall(function() return fn:InvokeServer("DredgeMaster") end)
+            -- Use the existing bounded InvokeServer helper; a hung
+            -- StepProgress query must not block future quest polls.
+            local ok,result=invoke(fn,id,"DredgeMaster")
             if ok and type(result)=="table" and type(result.StepProgress)=="table"
               and valid(id) then S.dredgeServerProgress=result end
         end
@@ -750,13 +777,17 @@ task.spawn(function()
             os.clock()>=(S.dredgeNextServerPoll or 0) and
             not S.dredgePollBusy then
             S.dredgePollBusy=true
+            S.dredgePollStartedAt=os.clock()
+            S.dredgePollAttempts=(S.dredgePollAttempts or 0)+1
             S.dredgeNextServerPoll=os.clock()+5
             local current=S.token
             local ok,err=pcall(refreshDredgeServerQuest,current)
             if not ok then
                 S.dredgeQuestPollError=tostring(err)
+                S.diagEvent("QUEST_POLL_EXCEPTION",tostring(err))
                 outputWarning("dredge-server-quest", "[GALAXIS DREDGE] Server quest poll:",err)
             end
+            S.dredgePollCompletedAt=os.clock()
             S.dredgePollBusy=false
         end
         task.wait(.2)
@@ -1205,7 +1236,20 @@ local function dredgeCycle(id)
     local status=S.dredgeServerStatus
     -- Wait for the server decision (the UI cache can survive a quest reset).
     if not status or os.clock()-status.time>15 then
-        dredgeText("Checking CanStartQuest: "..tostring(S.dredgeQuestPollError or "pending"))
+        local why=tostring(S.dredgeQuestPollError or "pending")
+        -- A nonresponsive quest remote previously left AUTO DREDGE ON
+        -- forever with 0 pans. Stop safely and report the actual blocker.
+        if not status and S.dredgeInitAt and
+            os.clock()-S.dredgeInitAt>35 then
+            local reason="Quest status unavailable after 35s: "..why
+            S.diagLastFailure=reason
+            S.diagEvent("DREDGE_INIT_TIMEOUT",reason.." | "..S.diagSnapshot())
+            if stop then stop() end
+            dredgeText("STOPPED: "..reason)
+            return false
+        end
+        dredgeText("Checking CanStartQuest: "..why..
+            " (poll #"..tostring(S.dredgePollAttempts or 0)..")")
         return false
     end
     local mode=questMode(status)
@@ -2492,6 +2536,8 @@ local function startWorker(asDredge)
         S.dredgeNextWork="Choose a zone and Luck Cap"
         S.dredgeNextStop=nil
         S.dredgeNextServerPoll=0;S.dredgeQuestPollError=nil
+        S.dredgePollAttempts=0;S.dredgePollStartedAt=nil
+        S.dredgePollCompletedAt=nil;S.dredgeInitAt=os.clock()
         S.dredgePollBusy=false;S.dredgeTransitionMode=nil
         S.dredgeTransitionAttempts=0;S.dredgeTransitionAt=0
         -- Remove preexisting Luck Caps before the first planning snapshot.
