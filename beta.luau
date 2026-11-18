@@ -36,7 +36,7 @@ local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boos
 local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,digStall=1.25,recoveryDelay=.25,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
-local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
+local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,selling=false,doubleShake=true,
     earlyTP=true,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
@@ -588,6 +588,84 @@ local function startQuest(id)
     if not obj or not f or not f:IsA("RemoteFunction") then return false end
     return invoke(f,id,obj,nil,"DredgeMaster")
 end
+-- The game's dialog decision is authoritative:
+-- local canStart,status,step = CanStartQuest:InvokeServer(DredgeMaster)
+-- status=="Started" and step==2 => QuestCompleting / QuestTalked
+-- status=="Started" and step==1 => actively collecting
+-- canStart==true otherwise => InitialPrompt / StartQuest.
+-- Poll this at a low rate OUTSIDE the farm worker so panning stays fast.
+local function questMode(snapshot)
+    if not snapshot then return "unknown" end
+    if snapshot.status=="Started" then
+        if snapshot.step==2 then return "turnin" end
+        return "active"
+    end
+    if snapshot.canStart==true then return "available" end
+    return "unavailable"
+end
+local function queryQuestStatus(id)
+    local rem=questsRemote()
+    local questFolder=RS:FindFirstChild("Quests")
+    local quest=questFolder and questFolder:FindFirstChild("DredgeMaster")
+    local fn=rem and rem:FindFirstChild("CanStartQuest")
+    if not quest or not fn or not fn:IsA("RemoteFunction") then
+        return nil,"CanStartQuest remote or quest definition missing"
+    end
+    local ok,canStart,status,step=pcall(function()
+        return fn:InvokeServer(quest)
+    end)
+    if not ok then return nil,"CanStartQuest: "..tostring(canStart) end
+    if not valid(id) then return nil,"Dredge stopped" end
+    local result={canStart=canStart,status=status,step=tonumber(step),time=os.clock()}
+    return result
+end
+local function refreshDredgeServerQuest(id)
+    local state,err=queryQuestStatus(id)
+    if not valid(id) then return end
+    if not state then
+        S.dredgeQuestPollError=err
+        return
+    end
+    S.dredgeQuestPollError=nil
+    local old=S.dredgeServerStatus
+    S.dredgeServerStatus=state
+    if not old or old.status~=state.status or old.step~=state.step
+      or old.canStart~=state.canStart then
+        print("[GALAXIS DREDGE QUEST] CanStartQuest:",tostring(state.canStart),
+            "status:",tostring(state.status),"step:",tostring(state.step))
+    end
+    -- The server can supply current StepProgress even if the UI cache is stale.
+    if questMode(state)=="active" then
+        local qr=questsRemote()
+        local fn=qr and qr:FindFirstChild("GetCurrentQuestStep")
+        if fn and fn:IsA("RemoteFunction") then
+            local ok,result=pcall(function() return fn:InvokeServer("DredgeMaster") end)
+            if ok and type(result)=="table" and type(result.StepProgress)=="table"
+              and valid(id) then S.dredgeServerProgress=result end
+        end
+    else
+        S.dredgeServerProgress=nil
+    end
+end
+task.spawn(function()
+    while S.alive do
+        if S.dredge and S.running and
+            os.clock()>=(S.dredgeNextServerPoll or 0) and
+            not S.dredgePollBusy then
+            S.dredgePollBusy=true
+            S.dredgeNextServerPoll=os.clock()+5
+            local current=S.token
+            local ok,err=pcall(refreshDredgeServerQuest,current)
+            if not ok then
+                S.dredgeQuestPollError=tostring(err)
+                warn("[GALAXIS DREDGE] Server quest poll:",err)
+            end
+            S.dredgePollBusy=false
+        end
+        task.wait(.2)
+    end
+end)
+
 local function goWaypoint(wp,id)
     local folder=waypointFolder()
     local r=root()
@@ -641,6 +719,89 @@ local function pathTo(cf,id)
     r=root()
     return r~=nil and (r.Position-cf.Position).Magnitude<10
 end
+local function approachDredgeNPC(id)
+    -- NPC proximity matters for some quests. Do not confuse a waypoint
+    -- arrival with reaching the actual NPC/dialogue prompt.
+    local npcFolder=workspace:FindFirstChild("NPCs")
+    local npc=npcFolder and (npcFolder:FindFirstChild("DredgeMaster",true)
+            or npcFolder:FindFirstChild("Dredge Master",true))
+    if not npc then
+        -- Some maps put NPCs in a nested folder; don't scan the whole workspace.
+        local map=workspace:FindFirstChild("Map")
+        local actors=map and map:FindFirstChild("NPCs",true)
+        npc=actors and (actors:FindFirstChild("DredgeMaster",true)
+            or actors:FindFirstChild("Dredge Master",true))
+    end
+    if not npc then return true,"NPC model not exposed; relying on QuestTalked" end
+    local npcCF=getWaypointCF(npc)
+    if not npcCF then return true,"NPC has no readable pivot" end
+    local r=root()
+    if r and (r.Position-npcCF.Position).Magnitude<=12 then return true end
+    local target=npcCF*CFrame.new(0,0,5)
+    if pathTo(target,id) or move(target,id) then return true end
+    return false,"Could not approach Dredge Master NPC"
+end
+local function sendDredgeTalk(id)
+    local rem=questsRemote()
+    local talk=rem and rem:FindFirstChild("QuestTalked")
+    if not talk or not talk:IsA("RemoteEvent") then
+        return false,"QuestTalked remote unavailable"
+    end
+    if not goWaypoint("Dredge Master",id) then
+        return false,"Fast Travel to Dredge Master failed"
+    end
+    local ok,why=approachDredgeNPC(id)
+    if not ok then return false,why end
+    local sent,err=pcall(function() talk:FireServer("DredgeMaster") end)
+    if not sent then return false,tostring(err) end
+    return true
+end
+local function handleDredgeTransition(id,mode)
+    if S.dredgeTransitionMode~=mode then
+        S.dredgeTransitionMode=mode
+        S.dredgeTransitionAttempts=0
+        S.dredgeTransitionAt=0
+    end
+    if mode=="turnin" then
+        if os.clock()-(S.dredgeTransitionAt or 0)<8 then
+            dredgeText("Turn-in sent; awaiting CanStartQuest step change")
+            return
+        end
+        if (S.dredgeTransitionAttempts or 0)>=3 then
+            dredgeText("Turn-in did not confirm after 3 talks; stopped")
+            if stop then stop() end
+            return
+        end
+        S.dredgeTransitionAttempts+=1
+        S.dredgeTransitionAt=os.clock()
+        S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
+        S.dredgeCapLockedZone=nil
+        local ok,err=sendDredgeTalk(id)
+        dredgeText(ok and
+            ("Talked to Dredge Master ("..S.dredgeTransitionAttempts.."/3); verifying")
+            or ("Turn-in attempt "..S.dredgeTransitionAttempts.."/3: "..tostring(err)))
+    elseif mode=="available" then
+        if os.clock()-(S.dredgeTransitionAt or 0)<7 then
+            dredgeText("StartQuest sent; awaiting Started step 1")
+            return
+        end
+        if (S.dredgeTransitionAttempts or 0)>=3 then
+            dredgeText("Quest start not confirmed after 3 tries; stopped")
+            if stop then stop() end
+            return
+        end
+        S.dredgeTransitionAttempts+=1
+        S.dredgeTransitionAt=os.clock()
+        -- Observed Cobalt args: quest, nil, "DredgeMaster".
+        local ok,res=startQuest(id)
+        dredgeText(ok and res~=false and
+            ("StartQuest requested ("..S.dredgeTransitionAttempts.."/3); verifying")
+            or ("StartQuest attempt "..S.dredgeTransitionAttempts.."/3 not confirmed"))
+    end
+    -- Query the authoritative status again soon, without a remote spam loop.
+    S.dredgeNextServerPoll=math.min(S.dredgeNextServerPoll or math.huge,os.clock()+1.2)
+end
+
 local function safeDig()
     local x=S.presets["Fortune River"]
     return x and unpackCF(x.dig)
@@ -667,60 +828,38 @@ local function dredgeCycle(id)
     if not valid(id) or not S.dredge then return false end
     dredgeHealthWatch()
     if not valid(id) or not S.dredge then return false end
-    local state=getQuest()
-    if not state then
-        if not S.dredgeStartAt then S.dredgeStartAt=os.clock();startQuest(id) end
-        dredgeText("Waiting for quest cache / starting quest")
-        if os.clock()-S.dredgeStartAt>15 then dredgeText("No quest data: won't farm blindly") end
+    local status=S.dredgeServerStatus
+    -- Wait for the server decision (the UI cache can survive a quest reset).
+    if not status or os.clock()-status.time>15 then
+        dredgeText("Checking CanStartQuest: "..tostring(S.dredgeQuestPollError or "pending"))
+        return false
+    end
+    local mode=questMode(status)
+    if mode=="turnin" or mode=="available" then
+        handleDredgeTransition(id,mode)
+        return false
+    end
+    if mode=="unavailable" then
+        dredgeText("Dredge Master not offering a quest: "..tostring(status.status))
+        return false
+    end
+    -- Server now confirms this quest is active, so allow a fresh transition
+    -- later without retrying the previous StartQuest or QuestTalked.
+    S.dredgeTransitionMode="active"
+    S.dredgeTransitionAttempts=0
+    local state=getQuest() or S.dredgeServerProgress
+    local wants,done=remaining(state)
+    if not wants then
+        dredgeText(tostring(done or "Waiting for StepProgress"))
+        return false
+    end
+    if done then
+        -- If the client reaches full progress a little before CanStartQuest
+        -- advances to step 2, hold rather than farming useless extra pans.
+        dredgeText("Collection complete; waiting for server's talk step")
         return false
     end
     S.dredgeStartAt=nil
-    local wants,done=remaining(state)
-    if not wants and done=="No collect entries; checking server step" then
-        if serverQuestStep(id)==2 then wants={};done=true end
-    end
-    if not wants then dredgeText(tostring(done));return false end
-    if done then
-        if not S.dredgeTalkAt then
-            if os.clock()<(S.dredgeTurnRetryAt or 0) then return false end
-            if (S.dredgeTurnAttempts or 0)>=2 then
-                if stop then stop() end
-                dredgeText("Stopped: unable to reach Dredge Master for turn-in")
-                return false
-            end
-            S.dredgeTurnAttempts=(S.dredgeTurnAttempts or 0)+1
-            S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
-            S.dredgeCapLockedZone=nil
-            escapeZone()
-            local traveled=goWaypoint("Dredge Master",id)
-            local rem=questsRemote()
-            local talk=rem and rem:FindFirstChild("QuestTalked")
-            if traveled and talk and talk:IsA("RemoteEvent") then
-                local sent=pcall(function() talk:FireServer("DredgeMaster") end)
-                if sent then
-                    S.dredgeTalkAt=os.clock()
-                    dredgeText("Talked to Dredge Master; checking next quest")
-                else
-                    S.dredgeTurnRetryAt=os.clock()+6
-                    dredgeText("QuestTalked failed; one retry available")
-                end
-            else
-                S.dredgeTurnRetryAt=os.clock()+6
-                dredgeText("Could not reach Dredge Master; one retry available")
-            end
-        elseif not S.dredgeNextAt and os.clock()-S.dredgeTalkAt>3 then
-            S.dredgeNextAt=os.clock()
-            startQuest(id)
-            dredgeText("Requested next quest; verifying new collection objectives")
-        elseif S.dredgeNextAt and os.clock()-S.dredgeNextAt>12 then
-            escapeZone()
-            if stop then stop() end
-            dredgeText("Quest transition unverified; stopped further requests")
-        end
-        return false
-    end
-    S.dredgeTalkAt=nil;S.dredgeNextAt=nil
-    S.dredgeTurnAttempts=0;S.dredgeTurnRetryAt=nil
     local st=P:FindFirstChild("Stats")
     local raw=st and tonumber(st:GetAttribute("Luck"))
     local capacityNow=capacity()
@@ -1093,7 +1232,7 @@ local digXYZ=label("Not saved",14,78,149,22,10,MUTED)
 local waterXYZ=label("Not saved",177,78,149,22,10,MUTED)
 digXYZ.TextXAlignment=Enum.TextXAlignment.Center
 waterXYZ.TextXAlignment=Enum.TextXAlignment.Center
-local sellB=button("AUTO SELL: OFF",14,110,312,36,Body)
+local sellB=button("AUTO SELL: ON",14,110,312,36,Body)
 local farmB=button("AUTO FARM: OFF",14,157,312,40,Body)
 -- Compact footer: the only stats shown are current pan, total minerals, and average time.
 local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,213,312,27,12,FG)
@@ -1338,6 +1477,7 @@ stop=function()
         end
     end
     S.dredgeAppliedCap="UNSET";S.dredgeUncappedLuck=nil
+    S.dredgeServerStatus=nil;S.dredgeServerProgress=nil
     S.dredgeCapLockedZone=nil;S.dredgeCapLockedKey=nil
     S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
@@ -1752,6 +1892,10 @@ local function startWorker(asDredge)
         S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
+        S.dredgeServerStatus=nil;S.dredgeServerProgress=nil
+        S.dredgeNextServerPoll=0;S.dredgeQuestPollError=nil
+        S.dredgePollBusy=false;S.dredgeTransitionMode=nil
+        S.dredgeTransitionAttempts=0;S.dredgeTransitionAt=0
         -- Remove preexisting Luck Caps before the first planning snapshot.
         local rem=RS:FindFirstChild("Remotes")
         local setting=rem and rem:FindFirstChild("Settings")
