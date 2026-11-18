@@ -1,4 +1,4 @@
--- COASTAL PROSPECTING | BETA AUTO RECOVERY
+-- GALAXIS HUB | PROSPECTING BETA AUTO RECOVERY
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
 -- Close button stops loops, disconnects listeners, flushes pending log entries.
@@ -189,7 +189,7 @@ local function flush()
         for _,line in ipairs(L.unsaved) do retry[#retry+1]=line end
         L.unsaved=retry
         L.error=tostring(err)
-        warn("[COASTAL LOGGER] Write failure:",err)
+        warn("[GALAXIS HUB LOGGER] Write failure:",err)
     end
     L.writing=false
 end
@@ -273,7 +273,7 @@ end)
 
 -- Minimal monochrome UI
 local G=Instance.new("ScreenGui")
-G.Name="CoastalProspectingBeta";G.ResetOnSpawn=false;G.DisplayOrder=9999
+G.Name="GalaxisHubBeta";G.ResetOnSpawn=false;G.DisplayOrder=9999
 local parent=P:WaitForChild("PlayerGui")
 if type(gethui)=="function" then
     local ok,v=pcall(gethui)
@@ -295,15 +295,15 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,414),
-    Position=UDim2.new(.5,-170,.5,-207),
+    Size=UDim2.fromOffset(340,307),
+    Position=UDim2.new(.5,-170,.5,-153),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
 local H=make("Frame",{Size=UDim2.new(1,0,0,43),BackgroundTransparency=1,Active=true},W)
 make("TextLabel",{
     Position=UDim2.fromOffset(14,0),Size=UDim2.fromOffset(245,43),
-    BackgroundTransparency=1,Text="COASTAL  /  PROSPECTING BETA",
+    BackgroundTransparency=1,Text="GALAXIS HUB  /  BETA",
     TextColor3=FG,Font=Enum.Font.GothamBold,TextSize=12,
     TextXAlignment=Enum.TextXAlignment.Left
 },H)
@@ -324,22 +324,17 @@ local function label(txt,x,y,w,h,size,color)
         Font=Enum.Font.Gotham,TextSize=size or 11,TextXAlignment=Enum.TextXAlignment.Left
     },Body)
 end
-local status=label("Idle",14,7,312,23,12,MUTED)
-local count=label("0 completed pans",14,31,312,27,16)
-count.Font=Enum.Font.GothamBold
-local digB=button("SET DIG",14,68,149,36,Body)
-local waterB=button("SET WATER",177,68,149,36,Body)
-local digXYZ=label("Not saved",14,108,149,22,10,MUTED)
-local waterXYZ=label("Not saved",177,108,149,22,10,MUTED)
+local status=label("Idle",14,7,312,24,12,MUTED)
+local digB=button("SET DIG",14,38,149,36,Body)
+local waterB=button("SET WATER",177,38,149,36,Body)
+local digXYZ=label("Not saved",14,78,149,22,10,MUTED)
+local waterXYZ=label("Not saved",177,78,149,22,10,MUTED)
 digXYZ.TextXAlignment=Enum.TextXAlignment.Center
 waterXYZ.TextXAlignment=Enum.TextXAlignment.Center
-local sellB=button("AUTO SELL: OFF",14,141,312,36,Body)
-local farmB=button("AUTO FARM: OFF",14,185,312,40,Body)
-local logStatus=label("Logger: starting...",14,235,312,20,11,MUTED)
-local zoneStatus=label("Zone: "..zone(),14,255,312,20,11,MUTED)
-local perfStatus=label("Last cycle: --",14,278,312,43,11,MUTED)
-perfStatus.TextWrapped=true
-local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,329,312,27,12,FG)
+local sellB=button("AUTO SELL: OFF",14,110,312,36,Body)
+local farmB=button("AUTO FARM: OFF",14,157,312,40,Body)
+-- Compact footer: the only stats shown are current pan, total minerals, and average time.
+local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,213,312,27,12,FG)
 statsFooter.Font=Enum.Font.GothamBold
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
@@ -348,9 +343,6 @@ local function xyz(cf)
 end
 task.spawn(function()
     while S.alive do
-        logStatus.Text=L.error and ("Logger error: "..tostring(L.error):sub(1,27))
-            or string.format("Logger: %d batches / %d minerals",L.pan,L.minerals)
-        zoneStatus.Text="Zone: "..zone()
         local currentPan=S.cycles+(S.running and 1 or 0)
         local collected=L.minerals+#L.pending
         local avg=S.cycles>0 and string.format("%.2fs",S.totalCycleTime/S.cycles) or "--"
@@ -539,12 +531,7 @@ local function farming(id,r,target)
         local sum=0
         for _,v in ipairs(recent) do sum+=v end
         local ppm=sum>0 and (60*#recent/sum) or 0
-        count.Text=string.format("%d completed pans | %.1f/min",S.cycles,ppm)
-        perfStatus.Text=string.format(
-            "Last %.2fs | Dig %.2fs | Water %.2fs | Pan %.2fs\nShake+wait %.2fs | Early TP %s (%.2fs) | Avg %d",
-            total,digTime,waterTime,panTime,shakeTime,
-            earlyMoved and "YES" or "NO",earlyTime,#recent
-        )
+        -- Footer refreshes independently every 0.25s.
         autoSell(id,S.cycles)
     end
 end
@@ -612,7 +599,7 @@ bind(farmB.MouseButton1Click,function()
 
             if valid(id) then
                 show("Recovering in 1s: "..tostring(reason):sub(1,58))
-                warn("[COASTAL] Auto recovery:",reason)
+                warn("[GALAXIS HUB] Auto recovery:",reason)
                 if not pause(1,id) then break end
             end
         end
@@ -623,7 +610,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,414)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,307)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
@@ -651,5 +638,5 @@ bind(P.CharacterRemoving,function()
         show("Character changed - recovering")
     end
 end)
-print("[COASTAL BETA] Loaded. TSV:",FILE)
-if L.error then warn("[COASTAL BETA] Logger:",L.error) end
+print("[GALAXIS HUB BETA] Loaded. TSV:",FILE)
+if L.error then warn("[GALAXIS HUB BETA] Logger:",L.error) end
