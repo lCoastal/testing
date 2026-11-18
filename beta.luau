@@ -674,7 +674,9 @@ local function eligible(z,tier)
     if base=="Rotwood Swamp" then return tier>=3 and S.dredgeRisk end
     if base=="Timelocked Sanctuary" or base=="Infernal Heart" then return tier>=4 and openNow(base) end
     if base=="Abyssal Depth" then
-        return tier>=5 and S.dredgeRisk and totemNear(unpackCF(preset.dig).Position)
+        -- Risky Zones explicitly opts into Abyssal farming. Do not require
+        -- a nearby Luminite Totem just to consider the zone.
+        return tier>=5 and S.dredgeRisk
     end
     return true
 end
@@ -753,28 +755,29 @@ local function optimize(wants,places,L,cap)
     return options[1]
 end
 local function bestRoute(wants,L,cap)
-    local fallback
-    for tier=1,5 do
-        local places,reachable={},{}
-        for _,z in ipairs(ALL_ZONES) do
-            if eligible(z,tier) then
-                places[#places+1]=z
-                for _,x in ipairs(poolFor(z)) do reachable[x[1]]=true end
-            end
-        end
-        local can={}
-        for _,w in ipairs(wants) do if reachable[w.m] then can[#can+1]=w end end
-        if #can>0 then
-            local plan=optimize(can,places,L,cap)
-            if plan then
-                plan.covered=#can;plan.needed=#wants
-                if #can==#wants then return plan end
-                if not fallback or plan.covered>fallback.covered then fallback=plan end
-            end
+    -- Evaluate ALL currently allowed deposits together. The old tier loop
+    -- returned as soon as a safe tier covered every mineral, preventing
+    -- Abyssal (tier 5) from ever competing for a faster plan.
+    local places,reachable={},{}
+    for _,z in ipairs(ALL_ZONES) do
+        if eligible(z,5) then
+            places[#places+1]=z
+            for _,x in ipairs(poolFor(z)) do reachable[x[1]]=true end
         end
     end
-    return fallback
+    local can={}
+    for _,w in ipairs(wants) do
+        if reachable[w.m] then can[#can+1]=w end
+    end
+    if #can==0 then return nil end
+    local plan=optimize(can,places,L,cap)
+    if plan then
+        plan.covered=#can
+        plan.needed=#wants
+    end
+    return plan
 end
+
 local function getQuest()
     if type(getsenv)~="function" then return nil end
     local gui=P:FindFirstChild("PlayerGui")
@@ -1434,7 +1437,7 @@ local function dredgeHealthWatch()
     if h and h.Health<h.MaxHealth*.75 then
         escapeZone()
         if stop then stop() end
-        dredgeText("STOPPED: Rotwood HP below 75%; no forced teleport; move to safety")
+        dredgeText("STOPPED: risky-zone HP below 75%; no forced teleport; move to safety")
     end
 end
 local function describeDredgeTargets(group,remaining)
@@ -1528,7 +1531,10 @@ local function dredgeCycle(id)
         for _,g in ipairs(S.dredgeGroup) do
             local planned=S.dredgePlannedRemaining and S.dredgePlannedRemaining[g.m] or 0
             local left=need[g.m] or 0
-            if planned>0 and math.abs(planned-left)/planned>=.10 then
+            -- Completion is a hard replanning boundary, even if both
+            -- minerals share a deposit. Ordinary progress retains the
+            -- existing 10% heuristic to avoid cap oscillation.
+            if planned>0 and (left==0 or math.abs(planned-left)/planned>=.10) then
                 progressShift=true
                 break
             end
@@ -1546,9 +1552,13 @@ local function dredgeCycle(id)
         and S.dredgePlanLuck and
         math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
         and S.dredgePlanCapacity==capacityNow then
+        local anyCompleted=false
         for _,item in ipairs(S.dredgeGroup) do
-            if (need[item.m] or 0)>0 then keep=true;break end
+            local left=need[item.m] or 0
+            if left==0 then anyCompleted=true;break end
+            if left>0 then keep=true end
         end
+        if anyCompleted then keep=false end
     end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
@@ -1560,6 +1570,29 @@ local function dredgeCycle(id)
             return false
         end
         local choice=plan.stops[1]
+        -- Unlock the cap only when the active mineral set changes or
+        -- objectives are completed. This permits NONE -> 100 in the same
+        -- zone without reintroducing cap changes every few pans.
+        local oldObjectives={}
+        for _,v in ipairs(S.dredgeGroup or {}) do
+            if (need[v.m] or 0)>0 then oldObjectives[#oldObjectives+1]=v.m end
+        end
+        local newObjectives={}
+        for _,v in ipairs(choice.group or {}) do
+            if (need[v.m] or 0)>0 then newObjectives[#newObjectives+1]=v.m end
+        end
+        table.sort(oldObjectives)
+        table.sort(newObjectives)
+        local oldKey=table.concat(oldObjectives,"|")
+        local newKey=table.concat(newObjectives,"|")
+        if oldKey~=newKey then
+            S.dredgeCapLockedZone=nil
+            S.dredgeCapLockedKey=nil
+            S.diagEvent("DREDGE_RECALIBRATE",
+                "Objectives "..oldKey.." -> "..newKey..
+                " | zone="..tostring(baseDrop(choice.z))..
+                " | planned cap="..tostring(choice.cap or "NONE"))
+        end
         S.dredgeCurrent=choice.z;S.dredgeGroup=choice.group
         S.dredgeTargetCap=choice.cap
         S.dredgePlanLuck=L
@@ -1641,7 +1674,7 @@ local function dredgeCycle(id)
         S.dredgeReadyAt=os.clock()+1.2
         S.dredgeFailureCount=0
         S.dredgeFailureZone=targetZone
-        S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
+        S.dredgeRiskZone=(targetZone=="Rotwood Swamp" or targetZone=="Abyssal Depth")
         if S.dredgeCapLockedZone~=targetZone then
             S.dredgeCapLockedZone=nil
             S.dredgeCapLockedKey=nil
@@ -1656,9 +1689,8 @@ local function dredgeCycle(id)
         S.dredgeCapLockedZone=targetZone
         S.dredgeCapLockedKey=capKey
     end
-    -- Once a cap is selected for a deposit, freeze it there.
-    -- A 10% quest progress replan can change odds, but should not repeatedly
-    -- send cap updates for the SAME zone. A new zone/quest unlocks a new cap.
+    -- Freeze cap only while mining the same objective set. On objective
+    -- completion, the replan above clears the lock even within one zone.
     if S.dredgeCapLockedZone==targetZone and S.dredgeCapLockedKey then
         capKey=S.dredgeCapLockedKey
         S.dredgeTargetCap=capKey=="NONE" and nil or tonumber(capKey)
@@ -2859,7 +2891,7 @@ bind(riskButton.MouseButton1Click,function()
     S.dredgeRisk=not S.dredgeRisk
     riskButton.Text="RISKY ZONES: "..(S.dredgeRisk and "ON" or "OFF")
     S.dredgeGroup=nil
-    dredgeText(S.dredgeRisk and "Rotwood allowed with HP retreat; risk remains" or "Rotwood and Abyssal excluded")
+    dredgeText(S.dredgeRisk and "Rotwood + Abyssal allowed with HP retreat; risk remains" or "Rotwood and Abyssal excluded")
 end)
 bind(sellB.MouseButton1Click,function()
     if not S.sell and not getSell() then show("SellAll unavailable");return end
