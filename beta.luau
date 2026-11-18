@@ -31,7 +31,7 @@ while fileExists(FILE) do
     FILE=BASE.."_"..suffix..".txt"
 end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
-local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
+local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,digStall=1.25,recoveryDelay=.25,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
@@ -443,7 +443,7 @@ local function farming(id,r,target)
             elseif not pause(timing("dig"),id) then
                 return
             end
-            if os.clock()-lastProgress>3 then return "Digging stalled" end
+            if os.clock()-lastProgress>CFG.digStall then return "Digging stalled" end
         end
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then return "Pan not full" end
@@ -551,7 +551,7 @@ bind(sellB.MouseButton1Click,function()
     sellB.Text="AUTO SELL: "..(S.sell and "ON" or "OFF")
 end)
 -- ON is a persistent user request. A transient farm failure does not turn
--- the toggle off: we re-resolve the equipped pan and retry after 1 second.
+-- the toggle off: we re-resolve the equipped pan and retry quickly.
 bind(farmB.MouseButton1Click,function()
     if S.running then
         stop()
@@ -598,9 +598,9 @@ bind(farmB.MouseButton1Click,function()
             S.waiting=false
 
             if valid(id) then
-                show("Recovering in 1s: "..tostring(reason):sub(1,58))
+                show("Recovering in 0.25s: "..tostring(reason):sub(1,58))
                 warn("[GALAXIS HUB] Auto recovery:",reason)
-                if not pause(1,id) then break end
+                if not pause(CFG.recoveryDelay,id) then break end
             end
         end
     end)
