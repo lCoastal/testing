@@ -1,4 +1,4 @@
--- COASTAL PROSPECTING | BETA EXPERIMENTAL EARLY TP + PROFILER
+-- COASTAL PROSPECTING | BETA EARLY TELEPORT + TURBO
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
 -- Close button stops loops, disconnects listeners, flushes pending log entries.
@@ -32,12 +32,17 @@ while fileExists(FILE) do
 end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
 local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
+-- Turbo timings are optional; regular timings remain available for comparison.
+local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,testing=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
-    earlyTP=false,recentTimes={},
+    earlyTP=true,turbo=false,recentTimes={},
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
 E.CoastalSafeFarm=S
+local function timing(key)
+    return (S.turbo and TURBO[key]) or CFG[key]
+end
 
 local function valid(id) return S.alive and S.running and S.token==id end
 local function bind(sig,fn) local c=sig:Connect(fn);S.links[#S.links+1]=c;return c end
@@ -92,7 +97,7 @@ local function move(cf,id)
         if not r then return false end
         if (r.Position-cf.Position).Magnitude<7 then return true end
         local ok=pcall(function() r.CFrame=cf end)
-        if not ok or not pause(CFG.teleport,id) then return false end
+        if not ok or not pause(timing("teleport"),id) then return false end
         r=root()
         if r and (r.Position-cf.Position).Magnitude<10 then return true end
     end
@@ -246,7 +251,7 @@ bind(backpack.ChildAdded,function(item)
     end
     if not S.running or not S.waiting then return end
     local id=S.token
-    task.delay(.05,function()
+    task.delay(.02,function()
         if not valid(id) or not S.waiting or not item:IsA("Tool") then return end
         if item:GetAttribute("ItemType")=="Valuable" and not S.seen[item] then
             S.seen[item]=true
@@ -290,8 +295,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,493),
-    Position=UDim2.new(.5,-170,.5,-246),
+    Size=UDim2.fromOffset(340,535),
+    Position=UDim2.new(.5,-170,.5,-267),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -342,9 +347,10 @@ local cap=rounded(make("TextBox",{
 },Body))
 local logStatus=label("Logger: starting...",14,320,312,20,11,MUTED)
 local zoneStatus=label("Zone: "..zone(),14,342,312,20,11,MUTED)
-local earlyB=button("EARLY TP: OFF (EXPERIMENT)",14,367,312,34,Body)
+local earlyB=button("EARLY TP: ON (EXPERIMENT)",14,367,312,34,Body)
 local perfStatus=label("Last cycle: --",14,408,312,37,11,MUTED)
 perfStatus.TextWrapped=true
+local turboB=button("TURBO: OFF (TEST)",14,455,312,34,Body)
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -437,7 +443,7 @@ local function farming(id,r,target)
             if before>=target-.01 then break end
             local ok=invoke(r.dig,id,1)
             if not ok then return "Collect failed" end
-            if not pause(CFG.dig,id) then return end
+            if not pause(timing("dig"),id) then return end
             local after=fill(r)
             if after and after>before+.001 then lastProgress=os.clock() end
             if os.clock()-lastProgress>3 then return "Digging stalled" end
@@ -458,7 +464,7 @@ local function farming(id,r,target)
             local ok,result=invoke(r.pan,id)
             if not ok then return "Pan call failed" end
             if result==true then accepted=true;break end
-            if not pause(CFG.panRetry,id) then return end
+            if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
         local panTime=os.clock()-panStart
@@ -470,13 +476,13 @@ local function farming(id,r,target)
         local function finished()
             return S.completed or (S.rewards>0 and os.clock()-S.lastReward>=CFG.rewardGap)
         end
-        -- Experimental: overlap travel with the LAST part of reward settling.
-        -- Wait for a short lull (~55% of normal reward gap), rather than
-        -- teleporting at the first 2 minerals and risking the whole batch.
-        -- No additional shakes after starting the early teleport.
+        -- Experimental early travel after first two rewards and a very short lull.
+        -- Starts at ~30ms of quiet instead of ~165ms. If leaving water
+        -- interrupts remaining rewards, switch Early TP OFF for that zone.
+        -- No further shake packets are sent after teleporting.
         local function tryEarlyMove()
             if not S.earlyTP or earlyMoved or S.completed or S.rewards<2 then return false end
-            if os.clock()-S.lastReward < CFG.rewardGap*.55 then return false end
+            if os.clock()-S.lastReward < math.max(.03,CFG.rewardGap*.10) then return false end
             show("Early teleport (test)")
             local t=os.clock()
             if not move(S.dig,id) then return nil,"Early teleport failed" end
@@ -496,7 +502,7 @@ local function farming(id,r,target)
             local ok=pcall(function() r.shake:FireServer() end)
             if not ok then return "Shake failed" end
             if S.doubleShake then
-                if not pause(CFG.shakeGap,id,finished) then return end
+                if not pause(timing("shakeGap"),id,finished) then return end
                 if finished() then done=true;break end
                 jumped,err=tryEarlyMove()
                 if err then return err end
@@ -504,7 +510,7 @@ local function farming(id,r,target)
                 ok=pcall(function() r.shake:FireServer() end)
                 if not ok then return "Shake failed" end
             end
-            if not pause(CFG.shake,id,finished) then return end
+            if not pause(timing("shake"),id,finished) then return end
         end
 
         if not done then
@@ -576,6 +582,12 @@ bind(earlyB.MouseButton1Click,function()
     earlyB.Text="EARLY TP: "..(S.earlyTP and "ON (EXPERIMENT)" or "OFF (EXPERIMENT)")
     perfStatus.Text="Speed sample reset: measure 10 pans for comparison"
 end)
+bind(turboB.MouseButton1Click,function()
+    S.turbo=not S.turbo
+    S.recentTimes={}
+    turboB.Text="TURBO: "..(S.turbo and "ON (TEST)" or "OFF (TEST)")
+    perfStatus.Text="Speed sample reset: measure 10 pans for comparison"
+end)
 bind(startB.MouseButton1Click,function()
     if S.running or S.testing then return end
     if not S.dig or not S.water then show("Save both positions");return end
@@ -606,7 +618,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,493)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,535)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
