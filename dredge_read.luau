@@ -63,6 +63,7 @@ local function record(path,v)
     add("=== "..path.." ===")
     dump(v,1,{})
 end
+local probeShallow
 local function probe(root,path)
     if typeof(root)~="table" then return end
     local containers={
@@ -93,7 +94,7 @@ local function probe(root,path)
 end
 
 -- Deliberately shallow secondary lookup, avoiding recursive env traversal.
-function probeShallow(root,path)
+probeShallow=function(root,path)
     for _,key in ipairs({"currentQuestData","localQuestData","DredgeMasterQuestData"}) do
         local data=rawget(root,key)
         if typeof(data)=="table" then
@@ -115,7 +116,11 @@ if type(getgenv)=="function" then
 end
 if typeof(shared)=="table" then probe(shared,"shared") end
 
-local folders={player:FindFirstChild("PlayerScripts"),player:FindFirstChild("PlayerGui")}
+local folders={}
+for _,name in ipairs({"PlayerScripts","PlayerGui"}) do
+    local folder=player:FindFirstChild(name)
+    if folder then folders[#folders+1]=folder end
+end
 local seenScript={}
 local scripts={}
 for _,folder in ipairs(folders) do
