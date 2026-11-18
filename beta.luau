@@ -1016,8 +1016,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,758),
-    Position=UDim2.new(.5,-170,.5,-379),
+    Size=UDim2.fromOffset(340,463),
+    Position=UDim2.new(.5,-170,.5,-231),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -1077,7 +1077,7 @@ local mapWaypoint=button("MAP TO WAYPOINT",177,380,149,36,Body)
 local travelWaypoint=button("FAST TRAVEL",14,423,149,36,Body)
 local importLegacy=button("IMPORT OLD WP",177,423,149,36,Body)
 local presetStatus=label("",14,466,312,21,11,MUTED)
-label("SET DIG / WATER saves to MINING ZONE",14,491,312,19,10,MUTED)
+local presetHint=label("SET DIG / WATER saves to MINING ZONE",14,491,312,19,10,MUTED)
 local exportPresetButton=button("EXPORT PRESETS TO TXT + CLIPBOARD",14,519,312,35,Body)
 dredgeButton=button("AUTO DREDGE: OFF",14,563,312,35,Body)
 local ringButton=button("PURIFYING RING: NO",14,606,149,32,Body)
@@ -1099,6 +1099,175 @@ local function refreshPreset()
     -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
 refreshPreset()
+
+-- ===== COMPACT 4-TAB INTERFACE =====
+-- The existing farm, Dredge and preset controls are the exact same objects
+-- (and callbacks). Reparenting them keeps every existing function intact.
+local function page()
+    return make("Frame",{
+        Position=UDim2.fromOffset(0,75),
+        Size=UDim2.new(1,0,1,-75),
+        BackgroundTransparency=1,
+        Visible=false
+    },Body)
+end
+local farmPage,dredgePage,diagnosticPage,treasurePage=page(),page(),page(),page()
+local TAB_NAMES={"AUTO FARM","AUTO DREDGE","ZONE DIAG.","TREASURE"}
+local TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage}
+local tabButtons={}
+for i,name in ipairs(TAB_NAMES) do
+    tabButtons[i]=button(name,5+(i-1)*84,36,80,32,Body)
+    tabButtons[i].TextSize=10
+end
+local function relocate(widget,parent,x,y)
+    widget.Parent=parent
+    widget.Position=UDim2.fromOffset(x,y)
+end
+
+-- Auto Farm: retain manual digging/panning, selling, and footer.
+relocate(digB,farmPage,14,20)
+relocate(waterB,farmPage,177,20)
+relocate(digXYZ,farmPage,14,61)
+relocate(waterXYZ,farmPage,177,61)
+relocate(sellB,farmPage,14,101)
+relocate(farmB,farmPage,14,151)
+relocate(statsFooter,farmPage,14,210)
+local farmInstructions=label("Save dig and water positions in your selected zone.",14,256,312,37,11,MUTED)
+farmInstructions.TextWrapped=true
+relocate(farmInstructions,farmPage,14,256)
+
+-- Auto Dredge: objective readout, safety switches, and 100%-quality model.
+relocate(dredgeButton,dredgePage,14,20)
+dredgeButton.Size=UDim2.fromOffset(312,42)
+relocate(ringButton,dredgePage,14,76)
+relocate(riskButton,dredgePage,177,76)
+relocate(fullQualityLabel,dredgePage,14,122)
+relocate(dredgeStatus,dredgePage,14,154)
+dredgeStatus.Size=UDim2.fromOffset(312,45)
+dredgeStatus.TextWrapped=true
+local dredgeObjectiveLabel=label("Reading Dredge objectives...",14,217,312,95,11,FG)
+dredgeObjectiveLabel.TextWrapped=true
+dredgeObjectiveLabel.TextYAlignment=Enum.TextYAlignment.Top
+relocate(dredgeObjectiveLabel,dredgePage,14,217)
+
+-- Zone Diagnostic: concise by default. All legacy preset controls retained
+-- in a hidden, scrollable editor rather than deleted.
+local zoneDiagTitle=label("ZONE DIAGNOSTIC",14,12,312,23,12,FG)
+relocate(zoneDiagTitle,diagnosticPage,14,12)
+local zoneLiveInfo=label("Reading live deposit...",14,48,312,66,11,MUTED)
+zoneLiveInfo.TextWrapped=true
+zoneLiveInfo.TextYAlignment=Enum.TextYAlignment.Top
+relocate(zoneLiveInfo,diagnosticPage,14,48)
+local editPresets=button("EDIT ZONE PRESETS",14,124,312,36,diagnosticPage)
+local presetEditor=make("ScrollingFrame",{
+    Position=UDim2.fromOffset(10,170),
+    Size=UDim2.new(1,-20,1,-181),
+    BackgroundTransparency=1,
+    BorderSizePixel=0,
+    CanvasSize=UDim2.fromOffset(0,420),
+    ScrollBarThickness=5,
+    ScrollingDirection=Enum.ScrollingDirection.Y,
+    Visible=false
+},diagnosticPage)
+relocate(zoneTitle,presetEditor,4,5)
+relocate(prevZone,presetEditor,4,27)
+relocate(zoneName,presetEditor,46,27)
+relocate(nextZone,presetEditor,280,27)
+relocate(warpTitle,presetEditor,4,67)
+relocate(prevWaypoint,presetEditor,4,89)
+relocate(waypointName,presetEditor,46,89)
+relocate(nextWaypoint,presetEditor,280,89)
+relocate(loadZone,presetEditor,4,133)
+relocate(mapWaypoint,presetEditor,167,133)
+relocate(travelWaypoint,presetEditor,4,176)
+relocate(importLegacy,presetEditor,167,176)
+relocate(presetStatus,presetEditor,4,220)
+relocate(presetHint,presetEditor,4,249)
+relocate(exportPresetButton,presetEditor,4,286)
+-- Fit inherited button positions into the 320 px-wide scroll panel.
+loadZone.Size=UDim2.fromOffset(149,36)
+mapWaypoint.Size=UDim2.fromOffset(149,36)
+travelWaypoint.Size=UDim2.fromOffset(149,36)
+importLegacy.Size=UDim2.fromOffset(149,36)
+exportPresetButton.Size=UDim2.fromOffset(312,35)
+local morePresetHelp=label(
+    "Controls preserved for editing, importing, exporting and traveling.",
+    4,334,300,40,10,MUTED)
+morePresetHelp.TextWrapped=true
+relocate(morePresetHelp,presetEditor,4,334)
+editPresets.MouseButton1Click:Connect(function()
+    presetEditor.Visible=not presetEditor.Visible
+    zoneLiveInfo.Visible=not presetEditor.Visible
+    zoneDiagTitle.Visible=not presetEditor.Visible
+    editPresets.Text=presetEditor.Visible and "CLOSE PRESET EDITOR" or "EDIT ZONE PRESETS"
+    editPresets.Position=UDim2.fromOffset(14,presetEditor.Visible and 12 or 124)
+    presetEditor.Position=UDim2.fromOffset(10,presetEditor.Visible and 61 or 170)
+    presetEditor.Size=UDim2.new(1,-20,1,presetEditor.Visible and -70 or -181)
+end)
+
+-- Treasure maps intentionally have no automation yet.
+local treasureTitle=label("AUTO TREASURE MAP",14,23,312,32,13,FG)
+relocate(treasureTitle,treasurePage,14,23)
+local treasureNote=label(
+    "Coming later. No treasure map remotes are being fired.",
+    14,70,312,62,12,MUTED)
+treasureNote.TextWrapped=true
+relocate(treasureNote,treasurePage,14,70)
+
+local activeTab=1
+local function openTab(n)
+    activeTab=n
+    for i,p in ipairs(TAB_PAGES) do
+        p.Visible=i==n
+        tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(70,74,83) or PANEL
+        tabButtons[i].TextColor3=i==n and FG or MUTED
+    end
+end
+for i,tab in ipairs(tabButtons) do
+    local index=i
+    bind(tab.MouseButton1Click,function() openTab(index) end)
+end
+openTab(1)
+
+-- Quest and live zone diagnostics refresh independently of farming.
+task.spawn(function()
+    while S.alive do
+        if diagnosticPage.Visible then
+            local r=root()
+            local pos=r and r.Position
+            zoneLiveInfo.Text="Current deposit: "..tostring(zone())..
+                "\nCharacter: "..(pos and string.format("%.1f, %.1f, %.1f",pos.X,pos.Y,pos.Z) or "not spawned")..
+                "\nLoaded farm zone: "..tostring(S.activeZone or "none")
+        end
+        if dredgePage.Visible then
+            local quest=getQuest()
+            if quest then
+                local progress={}
+                local data=quest.StepProgress
+                if type(data)=="table" then
+                    for _,v in pairs(data) do
+                        if type(v)=="table" then
+                            if v.Talk=="DredgeMaster" then
+                                progress[#progress+1]="Talk to Dredge Master (turn-in)"
+                            elseif type(v.Collect)=="string" then
+                                progress[#progress+1]=v.Collect..": "..
+                                    tostring(v.Progress or 0).."/"..tostring(v.Amount or "?")
+                            end
+                        end
+                    end
+                end
+                table.sort(progress)
+                dredgeObjectiveLabel.Text=#progress>0 and
+                    ("QUEST OBJECTIVES\n"..table.concat(progress,"\n"))
+                    or "Quest data found; objectives not available"
+            else
+                dredgeObjectiveLabel.Text="Quest data not yet available"
+            end
+        end
+        task.wait(1)
+    end
+end)
+
 show=function(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -1617,7 +1786,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,758)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,463)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
