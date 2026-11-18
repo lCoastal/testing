@@ -1,4 +1,4 @@
--- COASTAL PROSPECTING | BETA EARLY TELEPORT + TURBO
+-- COASTAL PROSPECTING | BETA FAST COMPACT
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
 -- Close button stops loops, disconnects listeners, flushes pending log entries.
@@ -34,8 +34,8 @@ local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boos
 local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
-local S={alive=true,running=false,testing=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
-    earlyTP=true,turbo=false,recentTimes={},
+local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
+    earlyTP=true,turbo=true,recentTimes={},
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
@@ -295,8 +295,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,535),
-    Position=UDim2.new(.5,-170,.5,-267),
+    Size=UDim2.fromOffset(340,371),
+    Position=UDim2.new(.5,-170,.5,-185),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -327,30 +327,19 @@ end
 local status=label("Idle",14,7,312,23,12,MUTED)
 local count=label("0 completed pans",14,31,312,27,16)
 count.Font=Enum.Font.GothamBold
-local digB=button("SET DIG",14,69,149,36,Body)
-local waterB=button("SET WATER",177,69,149,36,Body)
-local digXYZ=label("Not saved",14,109,149,22,10,MUTED)
-local waterXYZ=label("Not saved",177,109,149,22,10,MUTED)
+local digB=button("SET DIG",14,68,149,36,Body)
+local waterB=button("SET WATER",177,68,149,36,Body)
+local digXYZ=label("Not saved",14,108,149,22,10,MUTED)
+local waterXYZ=label("Not saved",177,108,149,22,10,MUTED)
 digXYZ.TextXAlignment=Enum.TextXAlignment.Center
 waterXYZ.TextXAlignment=Enum.TextXAlignment.Center
-local testB=button("TEST DIG",14,141,149,36,Body)
-local sellB=button("AUTO SELL: OFF",177,141,149,36,Body)
-local shakeB=button("DOUBLE SHAKE: ON",14,188,312,35,Body)
-local startB=button("START",14,235,149,40,Body)
-local stopB=button("STOP",177,235,149,40,Body)
-label("Capacity",14,286,130,27,12,MUTED)
-local cap=rounded(make("TextBox",{
-    Position=UDim2.fromOffset(177,284),Size=UDim2.fromOffset(149,29),
-    BackgroundColor3=PANEL,BorderSizePixel=0,
-    Text=tostring(capacity() or ""),PlaceholderText="Capacity",
-    TextColor3=FG,Font=Enum.Font.Gotham,TextSize=12,ClearTextOnFocus=false
-},Body))
-local logStatus=label("Logger: starting...",14,320,312,20,11,MUTED)
-local zoneStatus=label("Zone: "..zone(),14,342,312,20,11,MUTED)
-local earlyB=button("EARLY TP: ON (EXPERIMENT)",14,367,312,34,Body)
-local perfStatus=label("Last cycle: --",14,408,312,37,11,MUTED)
+local sellB=button("AUTO SELL: OFF",14,141,312,36,Body)
+local startB=button("START",14,185,149,40,Body)
+local stopB=button("STOP",177,185,149,40,Body)
+local logStatus=label("Logger: starting...",14,235,312,20,11,MUTED)
+local zoneStatus=label("Zone: "..zone(),14,255,312,20,11,MUTED)
+local perfStatus=label("Last cycle: --",14,278,312,43,11,MUTED)
 perfStatus.TextWrapped=true
-local turboB=button("TURBO: OFF (TEST)",14,455,312,34,Body)
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -432,6 +421,9 @@ local function autoSell(id,cycle)
 end
 local function farming(id,r,target)
     while valid(id) do
+        -- Refresh capacity each cycle, including equipment/buff changes.
+        local newCapacity=capacity()
+        if newCapacity and newCapacity>0 then target=newCapacity end
         local cycleStart=os.clock()
         show("Digging")
         if not move(S.dig,id) then return "Dig teleport failed" end
@@ -443,9 +435,15 @@ local function farming(id,r,target)
             if before>=target-.01 then break end
             local ok=invoke(r.dig,id,1)
             if not ok then return "Collect failed" end
-            if not pause(timing("dig"),id) then return end
+            -- InvokeServer already waits for a server reply. On acknowledged
+            -- Fill progress, go straight to the next Collect with no extra sleep.
+            -- Only back off when replication/progress has not caught up.
             local after=fill(r)
-            if after and after>before+.001 then lastProgress=os.clock() end
+            if after and after>before+.001 then
+                lastProgress=os.clock()
+            elseif not pause(timing("dig"),id) then
+                return
+            end
             if os.clock()-lastProgress>3 then return "Digging stalled" end
         end
         if not valid(id) then return end
@@ -552,49 +550,18 @@ bind(waterB.MouseButton1Click,function()
     local r=root()
     if r then S.water=r.CFrame;waterB.Text="WATER SAVED";waterXYZ.Text=xyz(S.water) end
 end)
-bind(testB.MouseButton1Click,function()
-    if S.running or S.testing then return end
-    local r=panTool()
-    if not r then show("Equip your pan");return end
-    S.testing=true;show("Testing dig")
-    task.spawn(function()
-        local before=fill(r)
-        local ok=pcall(function() r.dig:InvokeServer(1) end)
-        task.wait(.2)
-        if not S.alive then return end
-        local after=fill(r)
-        S.testing=false
-        show(ok and before and after and after>before and "Dig test successful" or "Dig test failed")
-    end)
-end)
 bind(sellB.MouseButton1Click,function()
     if not S.sell and not getSell() then show("SellAll unavailable");return end
     S.sell=not S.sell
     sellB.Text="AUTO SELL: "..(S.sell and "ON" or "OFF")
 end)
-bind(shakeB.MouseButton1Click,function()
-    S.doubleShake=not S.doubleShake
-    shakeB.Text="DOUBLE SHAKE: "..(S.doubleShake and "ON" or "OFF")
-end)
-bind(earlyB.MouseButton1Click,function()
-    S.earlyTP=not S.earlyTP
-    S.recentTimes={}
-    earlyB.Text="EARLY TP: "..(S.earlyTP and "ON (EXPERIMENT)" or "OFF (EXPERIMENT)")
-    perfStatus.Text="Speed sample reset: measure 10 pans for comparison"
-end)
-bind(turboB.MouseButton1Click,function()
-    S.turbo=not S.turbo
-    S.recentTimes={}
-    turboB.Text="TURBO: "..(S.turbo and "ON (TEST)" or "OFF (TEST)")
-    perfStatus.Text="Speed sample reset: measure 10 pans for comparison"
-end)
 bind(startB.MouseButton1Click,function()
-    if S.running or S.testing then return end
+    if S.running then return end
     if not S.dig or not S.water then show("Save both positions");return end
     local r=panTool()
     if not r then show("Equip your pan");return end
-    local target=tonumber(cap.Text)
-    if not target or target<=0 then show("Invalid capacity");return end
+    local target=capacity()
+    if not target or target<=0 then show("Capacity stat unavailable");return end
     if fill(r)==nil then show("Fill unavailable");return end
     S.running=true;S.token+=1
     local id=S.token
@@ -618,7 +585,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,535)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,371)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
