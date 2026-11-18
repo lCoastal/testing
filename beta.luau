@@ -816,6 +816,10 @@ local function dredgeCycle(id)
             return false
         end
         S.dredgeTravelRetryAt=nil
+        -- After a successful arrival, allow one new fallback warp on a
+        -- separate FUTURE visit, not repeatedly during this visit.
+        S.dredgeWarped[targetZone]=nil
+        S.dredgeTravelFailed[targetZone]=nil
         S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
         if S.dredgeCapLockedZone~=targetZone then
             S.dredgeCapLockedZone=nil
@@ -825,6 +829,12 @@ local function dredgeCycle(id)
         S.activeZone=targetZone
     end
     local capKey=S.dredgeTargetCap and tostring(S.dredgeTargetCap) or "NONE"
+    -- Also lock when the previously active cap happens to match the new
+    -- deposit's cap; no new remote call is needed in that case.
+    if not S.dredgeCapLockedZone and S.dredgeAppliedCap==capKey then
+        S.dredgeCapLockedZone=targetZone
+        S.dredgeCapLockedKey=capKey
+    end
     -- Once a cap is selected for a deposit, freeze it there.
     -- A 10% quest progress replan can change odds, but should not repeatedly
     -- send cap updates for the SAME zone. A new zone/quest unlocks a new cap.
@@ -1334,6 +1344,10 @@ stop=function()
     if hadDredge and S.dredgeRestore then
         S.dig=S.dredgeRestore.dig;S.water=S.dredgeRestore.water
         S.activeZone=S.dredgeRestore.zone
+        digB.Text=S.dig and "DIG SAVED" or "SET DIG"
+        waterB.Text=S.water and "WATER SAVED" or "SET WATER"
+        digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
+        waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
         S.dredgeRestore=nil
     end
     if dredgeButton then dredgeButton.Text="AUTO DREDGE: OFF" end
