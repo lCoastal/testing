@@ -1077,6 +1077,39 @@ end
 local function farmMove(cf,id)
     return move(cf,id)
 end
+-- Normal farm movement is instantaneous. On the next remote call, however,
+-- the server may have snapped the character back to the previous location.
+-- Verify the actual position before Collect/Pan; correct only when needed.
+local function ensureFarmPosition(cf,id,action)
+    if not cf or not valid(id) then return false end
+    local avatar=root()
+    if not avatar then return false end
+    local offset=(avatar.Position-cf.Position).Magnitude
+    if offset<=7 then return true end
+    S.diagEvent("POSITION_DRIFT",string.format(
+        "%s %.1f studs away from action spot; correcting",
+        tostring(action),offset))
+    for attempt=1,3 do
+        if not valid(id) then return false end
+        local moved=farmMove(cf,id)
+        -- Only wait when the prior movement did not stick. The fast path
+        -- above adds zero delay for properly positioned farming.
+        if moved and not pause(.15+(attempt-1)*.10,id) then return false end
+        avatar=root()
+        local distance=avatar and (avatar.Position-cf.Position).Magnitude or math.huge
+        if moved and distance<=7 then
+            S.diagEvent("POSITION_RECOVERED",string.format(
+                "%s attempt=%d distance=%.1f",tostring(action),attempt,distance))
+            return true
+        end
+        S.diagEvent("POSITION_BOUNCED",string.format(
+            "%s attempt=%d moved=%s distance=%.1f",
+            tostring(action),attempt,tostring(moved),distance))
+    end
+    S.diagEvent("POSITION_UNSTABLE",
+        tostring(action).." | "..S.diagSnapshot())
+    return false
+end
 -- Sparse recorded routes can leave 100+ studs between the first
 -- checkpoint and its warp stone. Bridge short gaps by ACTUAL walking,
 -- never by CFrame jumps. This fallback is used only if Pathfinding fails.
@@ -2384,6 +2417,9 @@ local function farming(id,r,target)
             local before=fill(r)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
+            if not ensureFarmPosition(S.dig,id,"COLLECT") then
+                return "Dig position unstable / server correction"
+            end
             -- Track the interval spent waiting for Collect's SERVER response.
             -- This records lag without changing request cadence or timing.
             local sentAt=os.clock()
@@ -2467,6 +2503,9 @@ local function farming(id,r,target)
         for _=1,15 do
             panAttempts+=1
             if not valid(id) then return end
+            if not ensureFarmPosition(S.water,id,"PAN") then
+                return "Water position unstable / server correction"
+            end
             local ok,result,invokeError=invoke(r.pan,id)
             if not ok then
                 S.diagEvent("PAN_CALL_FAILED",
