@@ -683,58 +683,136 @@ task.spawn(function()
     end
 end)
 
+-- Walking-first travel. Every segment uses Humanoid:MoveTo and a
+-- computed path; this never moves the avatar by artificial flight or
+-- stair-step CFrames. Failure is reported rather than looped indefinitely.
+local function stableAt(cf,id,radius,hold,maxWait)
+    local start=os.clock()
+    local inside=nil
+    while valid(id) and os.clock()-start<(maxWait or 3) do
+        local r=root()
+        if not r then return false end
+        if (r.Position-cf.Position).Magnitude<radius then
+            inside=inside or os.clock()
+            if os.clock()-inside>=(hold or .8) then return true end
+        else
+            inside=nil
+        end
+        task.wait(.07)
+    end
+    return false
+end
+local function walkRoute(cf,id,maxDistance)
+    local r=root()
+    local character=P.Character
+    local hum=character and character:FindFirstChildOfClass("Humanoid")
+    if not r or not hum or hum.Health<=0 then return false,"Character unavailable" end
+    local distance=(r.Position-cf.Position).Magnitude
+    if distance<7 then return stableAt(cf,id,9,.55,1.8) end
+    local limit=maxDistance or 850
+    if distance>limit then return false,"Beyond walking limit: "..math.floor(distance) end
+    local deadline=os.clock()+math.clamp(distance/math.max(8,hum.WalkSpeed)*2.8+18,17,170)
+    local segment=0
+    local failures=0
+    local rayParams=RaycastParams.new()
+    rayParams.FilterType=Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances={character}
+    while valid(id) and os.clock()<deadline do
+        r=root()
+        if not r or hum.Health<=0 then return false,"Character lost while walking" end
+        distance=(r.Position-cf.Position).Magnitude
+        if distance<9 then
+            if stableAt(cf,id,11,1.2,2.7) then return true end
+            return false,"Destination did not remain stable"
+        end
+        segment+=1
+        if segment>math.ceil(limit/115)+7 then return false,"Walking segments exceeded" end
+        local endpoint
+        if distance<=160 then
+            endpoint=cf.Position
+        else
+            local point=r.Position+(cf.Position-r.Position).Unit*125
+            local hit=workspace:Raycast(point+Vector3.new(0,70,0),
+                Vector3.new(0,-210,0),rayParams)
+            endpoint=hit and (hit.Position+Vector3.new(0,3,0)) or point
+        end
+        local ok,path=pcall(function()
+            local p=PathfindingService:CreatePath({
+                AgentRadius=2,AgentHeight=5,AgentCanJump=true,WaypointSpacing=5
+            })
+            p:ComputeAsync(r.Position,endpoint)
+            return p
+        end)
+        if not ok or not path or path.Status~=Enum.PathStatus.Success then
+            failures+=1
+            if failures>=2 then return false,"No walkable path to "..math.floor(distance).." studs" end
+            if not pause(.6,id) then return false,"Stopped" end
+        else
+            local before=(r.Position-cf.Position).Magnitude
+            local nodes=path:GetWaypoints()
+            if #nodes==0 then return false,"Path has no walking points" end
+            for _,node in ipairs(nodes) do
+                if not valid(id) or os.clock()>deadline then return false,"Walk interrupted/timed out" end
+                r=root()
+                if not r or hum.Health<=0 then return false,"Character lost" end
+                if (r.Position-node.Position).Magnitude>4.5 then
+                    if node.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
+                    hum:MoveTo(node.Position)
+                    local walkingDist=(r.Position-node.Position).Magnitude
+                    local perNode=math.clamp(walkingDist/math.max(8,hum.WalkSpeed)*2.5+1.3,2.3,10)
+                    local nodeDeadline=math.min(deadline,os.clock()+perNode)
+                    while valid(id) and os.clock()<nodeDeadline do
+                        r=root()
+                        if not r or hum.Health<=0 then return false,"Character lost" end
+                        if (r.Position-node.Position).Magnitude<=4.8 then break end
+                        task.wait(.075)
+                    end
+                    if not r or (r.Position-node.Position).Magnitude>6 then
+                        failures+=1
+                        break
+                    end
+                end
+            end
+            r=root()
+            if not r then return false,"Character lost" end
+            local after=(r.Position-cf.Position).Magnitude
+            if before-after>7 then failures=0 else failures+=1 end
+            if failures>=2 then return false,"Walking stalled / server corrected movement" end
+        end
+    end
+    return false,"Walk timed out"
+end
+local function pathTo(cf,id)
+    -- Short-range walking for NPC prompts and local movement.
+    return walkRoute(cf,id,135)
+end
 local function goWaypoint(wp,id)
     local folder=waypointFolder()
     local r=root()
     local to=folder and folder:FindFirstChild(wp or "")
-    if not r or not to then return false end
+    local target=to and getWaypointCF(to)
+    if not r or not target then return false,"Warp not found: "..tostring(wp) end
+    if (r.Position-target.Position).Magnitude<65 then
+        return stableAt(target,id,78,.6,2)
+    end
     local from=closestWaypoint(folder,r.Position)
-    if from and from~=to then
-        local remote=RS:FindFirstChild("Remotes")
-        local misc=remote and remote:FindFirstChild("Misc")
-        local travel=misc and misc:FindFirstChild("FastTravel")
-        if not travel or not travel:IsA("RemoteEvent") then return false end
-        if not pcall(function() travel:FireServer(from,to) end) then return false end
-        if not pause(1.0,id) then return false end
+    if not from then return false,"No source waypoint" end
+    -- When already closest to the desired waypoint, walking is required.
+    if from==to then return walkRoute(target,id,850) end
+    local rem=RS:FindFirstChild("Remotes")
+    local misc=rem and rem:FindFirstChild("Misc")
+    local travel=misc and misc:FindFirstChild("FastTravel")
+    if not travel or not travel:IsA("RemoteEvent") then
+        return false,"FastTravel remote missing"
     end
-    return valid(id)
-end
--- Walking is only tried for nearby zone transitions, never per-pan farming.
-local function pathTo(cf,id)
-    local ch=P.Character
-    local r=root()
-    local hum=ch and ch:FindFirstChildOfClass("Humanoid")
-    if not r or not hum or hum.Health<=0 then return false end
-    local d=cf.Position-r.Position
-    if d.Magnitude<7 then return true end
-    if d.Magnitude>110 or math.abs(d.Y)>18 then return false end
-    local path=PathfindingService:CreatePath({
-        AgentRadius=2,AgentHeight=5,AgentCanJump=true,WaypointSpacing=6
-    })
-    if not pcall(function() path:ComputeAsync(r.Position,cf.Position) end)
-        or path.Status~=Enum.PathStatus.Success then return false end
-    local nodes=path:GetWaypoints()
-    if #nodes==0 or #nodes>36 then return false end
-    local deadline=os.clock()+math.min(12,3+d.Magnitude/9)
-    for _,wp in ipairs(nodes) do
-        if not valid(id) or os.clock()>deadline then return false end
-        r=root()
-        if not r then return false end
-        if (r.Position-wp.Position).Magnitude>4 then
-            if wp.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
-            hum:MoveTo(wp.Position)
-            local limit=math.min(deadline,os.clock()+2.8)
-            while valid(id) and os.clock()<limit do
-                r=root()
-                if not r then return false end
-                if (r.Position-wp.Position).Magnitude<=4 then break end
-                task.wait(.06)
-            end
-            if not r or (r.Position-wp.Position).Magnitude>6 then return false end
-        end
+    if not pcall(function() travel:FireServer(from,to) end) then
+        return false,"FastTravel request failed"
     end
-    r=root()
-    return r~=nil and (r.Position-cf.Position).Magnitude<10
+    if not valid(id) then return false,"Stopped" end
+    -- FireServer returning does not prove travel worked. Wait for the server
+    -- to actually place us at the destination, then check for rubber-banding.
+    if stableAt(target,id,85,1.25,6.5) then return true end
+    return false,"Waypoint arrival rejected or rubber-banded"
 end
 local function approachDredgeNPC(id)
     -- NPC proximity matters for some quests. Do not confuse a waypoint
@@ -995,26 +1073,29 @@ local function dredgeCycle(id)
         if S.dredgeTravelRetryAt and os.clock()<S.dredgeTravelRetryAt then
             dredgeText("Travel cooldown - preventing warp spam");return false
         end
-        dredgeText("Moving to "..targetZone)
-        local arrived=pathTo(S.dig,id)
-        if not arrived then arrived=move(S.dig,id) end
+        dredgeText("Walking to "..targetZone)
+        local r=root()
+        local closeEnough=r and (r.Position-S.dig.Position).Magnitude<165
+        local arrived,why=false,nil
+        if closeEnough then arrived,why=walkRoute(S.dig,id,230) end
         if not arrived and not S.dredgeWarped[targetZone] then
+            -- One official FastTravel request to the mapped waypoint.
+            -- We never chain short CFrame teleports around the game's checks.
             S.dredgeWarped[targetZone]=true
-            dredgeText("One-time fallback waypoint: "..tostring(p.waypoint))
-            if goWaypoint(p.waypoint,id) then
-                arrived=pathTo(S.dig,id)
-                if not arrived then arrived=move(S.dig,id) end
-            end
+            dredgeText("Waypoint first: "..tostring(p.waypoint))
+            local warped,err=goWaypoint(p.waypoint,id)
+            if warped then arrived,why=walkRoute(S.dig,id,1150)
+            else why=err end
         end
         if not arrived then
             local tries=(S.dredgeTravelFailed[targetZone] or 0)+1
             S.dredgeTravelFailed[targetZone]=tries
             S.dredgeTravelRetryAt=os.clock()+8
-            dredgeText("Travel failed "..tries.."/2: "..targetZone)
-            if tries>=2 and stop then
-                stop()
-                dredgeText("Stopped after two failed zone moves")
-            end
+            dredgeText("Zone route blocked: "..targetZone..": "..tostring(why))
+            -- A rejected/blocked route will not repair itself after a fast
+            -- retry. Stop immediately rather than continuously warping.
+            if stop then stop() end
+            dredgeText("Stopped: no stable walking route to "..targetZone)
             return false
         end
         S.dredgeTravelRetryAt=nil
