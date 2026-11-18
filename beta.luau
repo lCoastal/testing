@@ -283,6 +283,8 @@ S.dredge=false;S.dredgePurifying=false;S.dredgeRisk=false
 S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAppliedCap="UNSET"
 S.dredgeUncappedLuck=nil;S.dredgeLuckReadyAt=0
 S.dredgeTravelFailed={};S.dredgeWarped={}
+S.dredgeReadyAt=0;S.dredgeZoneCycle=0;S.dredgeZoneSince=0
+S.dredgeFailureCount=0;S.dredgeFailureZone=nil
 S.dredgeCapLastAt=-math.huge;S.dredgeCapLockedZone=nil
 S.dredgeCapLockedKey=nil;S.dredgeTurnAttempts=0
 local dredgeButton,dredgeStatus,show,stop
@@ -899,6 +901,20 @@ local function dredgeCycle(id)
         end
         if progressShift then keep=false end
     end
+    -- Give a freshly reached deposit three successful pans before changing
+    -- zones due to small progress-ratio shifts; do not hold if its quest
+    -- objectives are all finished or a timed/safety restriction has changed.
+    if not keep and S.dredgeAt and S.dredgeCurrent and S.dredgeGroup
+        and S.dredgeAt==baseDrop(S.dredgeCurrent)
+        and S.cycles-(S.dredgeZoneCycle or 0)<3
+        and openNow(S.dredgeAt) and eligible(S.dredgeCurrent,5)
+        and S.dredgePlanLuck and
+        math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
+        and S.dredgePlanCapacity==capacityNow then
+        for _,item in ipairs(S.dredgeGroup) do
+            if (need[item.m] or 0)>0 then keep=true;break end
+        end
+    end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
         if not plan or not plan.stops[1] then
@@ -959,7 +975,13 @@ local function dredgeCycle(id)
         -- separate FUTURE visit, not repeatedly during this visit.
         S.dredgeWarped[targetZone]=nil
         S.dredgeTravelFailed[targetZone]=nil
-        S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
+        S.dredgeAt=targetZone
+        S.dredgeZoneSince=os.clock()
+        S.dredgeZoneCycle=S.cycles
+        S.dredgeReadyAt=os.clock()+1.2
+        S.dredgeFailureCount=0
+        S.dredgeFailureZone=targetZone
+        S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
         if S.dredgeCapLockedZone~=targetZone then
             S.dredgeCapLockedZone=nil
             S.dredgeCapLockedKey=nil
@@ -999,6 +1021,10 @@ local function dredgeCycle(id)
         S.dredgeCapLockedKey=capKey
         print("[GALAXIS DREDGE] Luck Cap applied once for zone:",targetZone,capText)
         if not pause(.2,id) then return false end
+    end
+    if os.clock()<(S.dredgeReadyAt or 0) then
+        dredgeText("Settling "..targetZone.." deposit/water before collecting")
+        return false
     end
     dredgeText(targetZone.." | cap "..tostring(S.dredgeTargetCap or "NONE")
         .." | "..tostring(S.dredgePlanText))
@@ -1569,6 +1595,11 @@ local function farming(id,r,target)
         local cycleStart=os.clock()
         show("Digging")
         if not move(S.dig,id) then return "Dig teleport failed" end
+        local freshlyChanged=S.dredge and S.dredgeAt and
+            (S.cycles-(S.dredgeZoneCycle or 0))<2
+        -- After a zone switch, give the new deposit enough time to register
+        -- before firing the normal rapid Collect calls. Normal pans unchanged.
+        if freshlyChanged and not pause(.42,id) then return end
         local lastProgress=os.clock()
         for _=1,CFG.maxDig do
             if not valid(id) then return end
@@ -1595,6 +1626,7 @@ local function farming(id,r,target)
         show("Panning")
         local waterStart=os.clock()
         if not move(S.water,id) then return "Water teleport failed" end
+        if freshlyChanged and not pause(.5,id) then return end
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
         local panStart=os.clock()
@@ -1621,7 +1653,8 @@ local function farming(id,r,target)
         -- interrupts remaining rewards, switch Early TP OFF for that zone.
         -- No further shake packets are sent after teleporting.
         local function tryEarlyMove()
-            if not S.earlyTP or earlyMoved or S.completed or S.rewards<2 then return false end
+            if not S.earlyTP or earlyMoved or S.completed or S.rewards<2
+                or freshlyChanged then return false end
             if os.clock()-S.lastReward < math.max(.03,CFG.rewardGap*.10) then return false end
             show("Early teleport (test)")
             local t=os.clock()
@@ -1665,6 +1698,10 @@ local function farming(id,r,target)
         local shakeTime=os.clock()-shakeStart
 
         S.waiting=false
+        if S.dredge then
+            S.dredgeFailureCount=0
+            S.dredgeFailureZone=S.dredgeAt
+        end
         S.cycles+=1
         local total=os.clock()-cycleStart
         S.totalCycleTime+=total
@@ -1889,6 +1926,8 @@ local function startWorker(asDredge)
         S.dredgeLastStepQuery=-math.huge
         S.dredgeUncappedLuck=nil
         S.dredgeWarped={};S.dredgeTravelFailed={};S.dredgeTravelRetryAt=nil
+        S.dredgeReadyAt=0;S.dredgeZoneCycle=S.cycles
+        S.dredgeFailureCount=0;S.dredgeFailureZone=nil
         S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
@@ -1953,9 +1992,44 @@ local function startWorker(asDredge)
             S.waiting=false
 
             if valid(id) then
-                show("Recovering in 0.25s: "..tostring(reason):sub(1,58))
-                warn("[GALAXIS HUB] Auto recovery:",reason)
-                if not pause(CFG.recoveryDelay,id) then break end
+                if S.dredge and S.dredgeAt then
+                    local zoneName=S.dredgeAt
+                    if S.dredgeFailureZone~=zoneName then
+                        S.dredgeFailureZone=zoneName
+                        S.dredgeFailureCount=0
+                    end
+                    S.dredgeFailureCount=(S.dredgeFailureCount or 0)+1
+                    local attempts=S.dredgeFailureCount
+                    warn("[GALAXIS DREDGE] Zone recovery",zoneName,
+                        attempts,tostring(reason))
+                    if attempts>=5 then
+                        stop()
+                        dredgeText("Stopped after 5 failed cycles at "..zoneName..
+                            ": "..tostring(reason))
+                        break
+                    end
+                    -- Reposition locally, without another FastTravel request.
+                    -- Pan/shake failures return to water; Collect failures to dig.
+                    local info=tostring(reason):lower()
+                    local toWater=info:find("pan",1,true) or
+                        info:find("shake",1,true) or
+                        info:find("completion",1,true)
+                    local targetCF=toWater and S.water or S.dig
+                    if targetCF then
+                        local r=root()
+                        if r and (r.Position-targetCF.Position).Magnitude>8 then
+                            if not pathTo(targetCF,id) then move(targetCF,id) end
+                        end
+                    end
+                    S.dredgeReadyAt=os.clock()+math.min(2.5,.65*attempts)
+                    show(string.format("Zone recovery %d/4: %s",
+                        attempts,zoneName))
+                    if not pause(math.min(2.5,.65*attempts),id) then break end
+                else
+                    show("Recovering in 0.25s: "..tostring(reason):sub(1,58))
+                    warn("[GALAXIS HUB] Auto recovery:",reason)
+                    if not pause(CFG.recoveryDelay,id) then break end
+                end
             end
         end
     end)
