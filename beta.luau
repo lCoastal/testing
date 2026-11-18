@@ -43,6 +43,8 @@ local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),p
 E.CoastalSafeFarm=S
 -- Exact Waypoints names: saved as human-selected dig/water position presets.
 -- Only explicit LOAD PRESET changes the active farm coordinates.
+-- The game has 21 FAST-TRAVEL WAYPOINTS but the toolkit has 35 MINING ZONES.
+-- Zones own dig/water coordinates; many zones can map to the same waypoint.
 local WAYPOINT_NAMES={
     "Crystal Caverns","Deeproot Spring","Dredge Master","Fortune River",
     "Fortune River Delta","Frostbitten Path","Frozen Peak","Lifespring Oasis",
@@ -51,10 +53,29 @@ local WAYPOINT_NAMES={
     "Sunscorched Desert","Sunset Beach","The Magma Furnace",
     "Timelocked Sanctuary","Volcanic Sands"
 }
-local PRESET_FILE="GalaxisHub_FarmPresets.json"
+-- Source: toolkit src/data/locs.js; keep the independent drop-location identifiers.
+local ZONE_NAMES={
+    "Rubble Creek Sands","Rubble Creek Deposits","Fortune River",
+    "Fortune River Delta","Sunset Beach","Crystal Cavern River","Azuralite Oasis",
+    "Volcanic Sands","Volcanic Springs","Windswept Beach","Magma Furnace",
+    "Infernal Heart","Frostbite River","Frostbite Waterfall","Frozen Peak",
+    "Overgrown Grotto","Deeproot Spring","Enchanted Ruins","Abyssal Depth",
+    "Rotwood Swamp","Fungal Marsh","Timelocked Sanctuary","Meteor Falls",
+    "Starfall River","Astral Caverns","Sandstone Stream","Mystic Floodplains",
+    "Lifespring Oasis","Tomb Vein I","Tomb Vein II","Tomb Vein III",
+    "The Void","Haunted Creek","North Pole","Seashell Beach"
+}
+local PRESET_FILE="GalaxisHub_ZonePresets.json" -- v2: separate zone -> waypoint map
+local OLD_PRESET_FILE="GalaxisHub_FarmPresets.json" -- v1: waypoint presets, read-only
+local waypointIndex,zoneIndex={},{}
+for i,name in ipairs(WAYPOINT_NAMES) do waypointIndex[name]=i end
+for i,name in ipairs(ZONE_NAMES) do zoneIndex[name]=i end
 S.presets={}
-S.selectedWaypoint=4
-S.activeWaypoint=nil
+S.legacyWaypoints={}
+S.selectedWaypoint=waypointIndex["Fortune River"]
+S.selectedZone=zoneIndex["Fortune River"]
+S.activeZone=nil
+
 local function packCF(cf)
     if typeof(cf)~="CFrame" then return nil end
     return {cf:GetComponents()}
@@ -67,43 +88,71 @@ local function unpackCF(t)
     local ok,cf=pcall(function() return CFrame.new(table.unpack(t)) end)
     return ok and cf or nil
 end
-local function persistPresets()
+local function decodePresetFile(name)
+    if type(readfile)~="function" then return nil end
+    if type(isfile)=="function" then
+        local ok,exists=pcall(isfile,name)
+        if ok and not exists then return nil end
+    end
+    local ok,raw=pcall(readfile,name)
+    if not ok then return nil end
+    local decoded,data=pcall(function() return HttpService:JSONDecode(raw) end)
+    return decoded and type(data)=="table" and data or nil
+end
+local function savePresets()
     if type(writefile)~="function" then return false,"writefile unavailable" end
     local ok,json=pcall(function()
         return HttpService:JSONEncode({
-            version=1,selected=WAYPOINT_NAMES[S.selectedWaypoint],points=S.presets
+            version=2,
+            selectedZone=ZONE_NAMES[S.selectedZone],
+            selectedWaypoint=WAYPOINT_NAMES[S.selectedWaypoint],
+            zones=S.presets
         })
     end)
     if not ok then return false,tostring(json) end
     local written,err=pcall(writefile,PRESET_FILE,json)
     return written,written and nil or tostring(err)
 end
-local function readPresets()
-    if type(readfile)~="function" then return end
-    if type(isfile)=="function" then
-        local ok,found=pcall(isfile,PRESET_FILE)
-        if ok and not found then return end
+local function validPreset(p)
+    if type(p)~="table" then return nil end
+    local dig,water=unpackCF(p.dig),unpackCF(p.water)
+    local waypoint=type(p.waypoint)=="string" and waypointIndex[p.waypoint] and p.waypoint or nil
+    if dig or water or waypoint then
+        return {dig=packCF(dig),water=packCF(water),waypoint=waypoint}
     end
-    local ok,json=pcall(readfile,PRESET_FILE)
-    if not ok then return end
-    local decoded,data=pcall(function() return HttpService:JSONDecode(json) end)
-    if not decoded or type(data)~="table" then return end
-    for i,name in ipairs(WAYPOINT_NAMES) do
-        if name==data.selected then S.selectedWaypoint=i end
-    end
-    if type(data.points)=="table" then
-        for _,name in ipairs(WAYPOINT_NAMES) do
-            local p=data.points[name]
-            if type(p)=="table" then
-                local dig,water=unpackCF(p.dig),unpackCF(p.water)
-                if dig or water then
-                    S.presets[name]={dig=packCF(dig),water=packCF(water)}
+    return nil
+end
+local function loadPresets()
+    local legacy=decodePresetFile(OLD_PRESET_FILE)
+    if legacy and type(legacy.points)=="table" then
+        for _,wp in ipairs(WAYPOINT_NAMES) do
+            local old=validPreset(legacy.points[wp])
+            if old then
+                S.legacyWaypoints[wp]=old
+                -- The only safe automatic migration: exact identical zone and waypoint names.
+                if zoneIndex[wp] then
+                    S.presets[wp]={dig=old.dig,water=old.water,waypoint=wp}
                 end
             end
         end
     end
+    local saved=decodePresetFile(PRESET_FILE)
+    if saved and saved.version==2 and type(saved.zones)=="table" then
+        for _,name in ipairs(ZONE_NAMES) do
+            local parsed=validPreset(saved.zones[name])
+            if parsed then S.presets[name]=parsed end
+        end
+        if zoneIndex[saved.selectedZone] then S.selectedZone=zoneIndex[saved.selectedZone] end
+        if waypointIndex[saved.selectedWaypoint] then S.selectedWaypoint=waypointIndex[saved.selectedWaypoint] end
+    end
+    -- For a new zone, exact names may use their matching waypoint.
+    for _,name in ipairs(ZONE_NAMES) do
+        if waypointIndex[name] and not S.presets[name] then
+            S.presets[name]={waypoint=name}
+        end
+    end
 end
-readPresets()
+loadPresets()
 local function waypointFolder()
     local map=workspace:FindFirstChild("Map")
     return map and map:FindFirstChild("Waypoints")
@@ -383,8 +432,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,459),
-    Position=UDim2.new(.5,-170,.5,-230),
+    Size=UDim2.fromOffset(340,562),
+    Position=UDim2.new(.5,-170,.5,-281),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -425,24 +474,38 @@ local farmB=button("AUTO FARM: OFF",14,157,312,40,Body)
 local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,213,312,27,12,FG)
 statsFooter.Font=Enum.Font.GothamBold
 
--- Waypoint setup remains separate from the running farm.
-local prevWaypoint=button("<",14,271,36,32,Body)
-local waypointName=label("",56,271,228,32,12,FG)
+-- Zone and waypoint selectors are separate: one warp may serve multiple deposits.
+local zoneTitle=label("MINING ZONE",14,247,312,18,10,MUTED)
+local prevZone=button("<",14,271,36,32,Body)
+local zoneName=label("",56,271,228,32,12,FG)
+zoneName.TextXAlignment=Enum.TextXAlignment.Center
+zoneName.Font=Enum.Font.GothamMedium
+local nextZone=button(">",290,271,36,32,Body)
+
+local warpTitle=label("FAST TRAVEL WAYPOINT",14,312,312,18,10,MUTED)
+local prevWaypoint=button("<",14,335,36,32,Body)
+local waypointName=label("",56,335,228,32,12,FG)
 waypointName.TextXAlignment=Enum.TextXAlignment.Center
 waypointName.Font=Enum.Font.GothamMedium
-local nextWaypoint=button(">",290,271,36,32,Body)
-local loadWaypoint=button("LOAD PRESET",14,313,149,36,Body)
-local travelWaypoint=button("FAST TRAVEL",177,313,149,36,Body)
-local presetStatus=label("",14,359,312,20,11,MUTED)
-label("SET DIG / WATER saves to selected waypoint",14,384,312,19,10,MUTED)
+local nextWaypoint=button(">",290,335,36,32,Body)
+local loadZone=button("LOAD ZONE",14,380,149,36,Body)
+local mapWaypoint=button("MAP TO WAYPOINT",177,380,149,36,Body)
+local travelWaypoint=button("FAST TRAVEL",14,423,149,36,Body)
+local importLegacy=button("IMPORT OLD WP",177,423,149,36,Body)
+local presetStatus=label("",14,466,312,21,11,MUTED)
+label("SET DIG / WATER saves to MINING ZONE",14,491,312,19,10,MUTED)
+local function selectedZone() return ZONE_NAMES[S.selectedZone] end
 local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local function refreshPreset()
-    local name=selectedWaypoint()
+    local name=selectedZone()
     local p=S.presets[name]
-    waypointName.Text=name
+    zoneName.Text=name
+    waypointName.Text=selectedWaypoint()
+    local mapping=p and p.waypoint or nil
     presetStatus.Text=((p and unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
         " | "..((p and unpackCF(p.water)) and "Water saved" or "Water missing")..
-        (S.activeWaypoint==name and " | LOADED" or "")
+        (mapping and (" | WP: "..mapping) or " | WP: NOT MAPPED")
+    -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
 refreshPreset()
 local function show(t) if S.alive then status.Text=t end end
@@ -644,11 +707,12 @@ local function farming(id,r,target)
         autoSell(id,S.cycles)
     end
 end
-local function applyWaypoint()
-    local p=S.presets[selectedWaypoint()]
+local function applyZone()
+    local name=selectedZone()
+    local p=S.presets[name]
     S.dig=p and unpackCF(p.dig) or nil
     S.water=p and unpackCF(p.water) or nil
-    S.activeWaypoint=selectedWaypoint()
+    S.activeZone=name
     digB.Text=S.dig and "DIG SAVED" or "SET DIG"
     waterB.Text=S.water and "WATER SAVED" or "SET WATER"
     digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
@@ -656,11 +720,11 @@ local function applyWaypoint()
     refreshPreset()
 end
 local function capture(key)
-    if S.running then show("Turn AUTO FARM OFF before editing positions");return end
+    if S.running then show("Turn AUTO FARM OFF before editing");return end
     local r=root()
     if not r then show("Character root unavailable");return end
-    if S.activeWaypoint~=selectedWaypoint() then applyWaypoint() end
-    local name=selectedWaypoint()
+    if S.activeZone~=selectedZone() then applyZone() end
+    local name=selectedZone()
     S.presets[name]=S.presets[name] or {}
     S.presets[name][key]=packCF(r.CFrame)
     if key=="dig" then S.dig=r.CFrame else S.water=r.CFrame end
@@ -669,30 +733,67 @@ local function capture(key)
     digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
     waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
     refreshPreset()
-    local ok,err=persistPresets()
-    show(ok and (name.." "..key.." saved") or ("Saved in session only: "..tostring(err)))
+    local ok,err=savePresets()
+    show(ok and (name.." "..key.." saved") or ("Session only: "..tostring(err)))
 end
 bind(digB.MouseButton1Click,function() capture("dig") end)
 bind(waterB.MouseButton1Click,function() capture("water") end)
+local function selectZone(i)
+    S.selectedZone=(i-1)%#ZONE_NAMES+1
+    local p=S.presets[selectedZone()]
+    if p and p.waypoint and waypointIndex[p.waypoint] then
+        S.selectedWaypoint=waypointIndex[p.waypoint]
+    end
+    refreshPreset()
+    savePresets()
+end
+bind(prevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
+bind(nextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
 bind(prevWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=(S.selectedWaypoint-2)%#WAYPOINT_NAMES+1
     refreshPreset()
-    persistPresets()
+    savePresets()
 end)
 bind(nextWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=S.selectedWaypoint%#WAYPOINT_NAMES+1
     refreshPreset()
-    persistPresets()
+    savePresets()
 end)
-bind(loadWaypoint.MouseButton1Click,function()
+bind(mapWaypoint.MouseButton1Click,function()
+    if S.running then show("Turn AUTO FARM OFF before editing mappings");return end
+    local name,wp=selectedZone(),selectedWaypoint()
+    S.presets[name]=S.presets[name] or {}
+    S.presets[name].waypoint=wp
+    local ok,err=savePresets()
+    refreshPreset()
+    show(ok and (name.." -> "..wp) or ("Mapping session only: "..tostring(err)))
+end)
+bind(loadZone.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before loading");return end
-    local p=S.presets[selectedWaypoint()]
+    local name=selectedZone()
+    local p=S.presets[name]
     if not p or not unpackCF(p.dig) or not unpackCF(p.water) then
-        show("Save both positions for "..selectedWaypoint())
+        show("Save both positions for "..name)
         return
     end
-    applyWaypoint()
-    show("Loaded "..selectedWaypoint().." preset")
+    applyZone()
+    show("Loaded "..name.." zone")
+end)
+bind(importLegacy.MouseButton1Click,function()
+    if S.running then show("Turn AUTO FARM OFF before importing");return end
+    local name,wp=selectedZone(),selectedWaypoint()
+    local old=S.legacyWaypoints[wp]
+    if not old or not (old.dig or old.water) then
+        show("No legacy positions for "..wp);return
+    end
+    local existing=S.presets[name]
+    if existing and (unpackCF(existing.dig) or unpackCF(existing.water)) then
+        show("Zone already has positions; won't overwrite");return
+    end
+    S.presets[name]={dig=old.dig,water=old.water,waypoint=wp}
+    local ok,err=savePresets()
+    refreshPreset()
+    show(ok and ("Imported old "..wp.." to "..name) or ("Imported in session: "..tostring(err)))
 end)
 bind(travelWaypoint.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before traveling");return end
@@ -781,7 +882,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,459)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,562)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
