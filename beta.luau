@@ -120,8 +120,18 @@ local function validPreset(p)
     if type(p)~="table" then return nil end
     local dig,water=unpackCF(p.dig),unpackCF(p.water)
     local waypoint=type(p.waypoint)=="string" and waypointIndex[p.waypoint] and p.waypoint or nil
-    if dig or water or waypoint then
-        return {dig=packCF(dig),water=packCF(water),waypoint=waypoint}
+    -- Optional sparse points, ordered from the mapped stone to the dig
+    -- location. The same points are used backward when returning.
+    local route=nil
+    if type(p.route)=="table" then
+        route={}
+        for _,node in ipairs(p.route) do
+            local cf=unpackCF(node)
+            if cf and #route<12 then route[#route+1]=packCF(cf) end
+        end
+    end
+    if dig or water or waypoint or route then
+        return {dig=packCF(dig),water=packCF(water),waypoint=waypoint,route=route}
     end
     return nil
 end
@@ -135,6 +145,7 @@ local function mergePreset(base,extra)
     if extra.dig~=nil then base.dig=extra.dig end
     if extra.water~=nil then base.water=extra.water end
     if extra.waypoint~=nil then base.waypoint=extra.waypoint end
+    if extra.route~=nil then base.route=extra.route end
     return base
 end
 -- Upgrade only the outdated Frostbite River built-in.
@@ -1464,6 +1475,7 @@ dredgeStatus=label("Dredge idle",14,684,312,22,11,MUTED)
 dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
 local function selectedZone() return ZONE_NAMES[S.selectedZone] end
 local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
+local routeCountLabel
 local function refreshPreset()
     local name=selectedZone()
     local p=S.presets[name]
@@ -1473,6 +1485,10 @@ local function refreshPreset()
     presetStatus.Text=((p and unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
         " | "..((p and unpackCF(p.water)) and "Water saved" or "Water missing")..
         (mapping and (" | WP: "..mapping) or " | WP: NOT MAPPED")
+    if routeCountLabel then
+        routeCountLabel.Text="Route: "..tostring(p and p.route and #p.route or 0)..
+            " points (stone -> dig; reverse to return)"
+    end
     -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
 refreshPreset()
@@ -1545,7 +1561,7 @@ local presetEditor=make("ScrollingFrame",{
     Size=UDim2.new(1,-20,1,-181),
     BackgroundTransparency=1,
     BorderSizePixel=0,
-    CanvasSize=UDim2.fromOffset(0,420),
+    CanvasSize=UDim2.fromOffset(0,520),
     ScrollBarThickness=5,
     ScrollingDirection=Enum.ScrollingDirection.Y,
     Visible=false
@@ -1576,6 +1592,12 @@ local morePresetHelp=label(
     4,334,300,40,10,MUTED)
 morePresetHelp.TextWrapped=true
 relocate(morePresetHelp,presetEditor,4,334)
+local addWalkPoint=button("ADD WALK POINT",4,382,149,34,presetEditor)
+local clearWalkRoute=button("CLEAR WALK ROUTE",167,382,149,34,presetEditor)
+routeCountLabel=label("Route: 0 points (stone -> dig)",4,425,306,40,10,MUTED)
+routeCountLabel.TextWrapped=true
+relocate(routeCountLabel,presetEditor,4,425)
+refreshPreset()
 editPresets.MouseButton1Click:Connect(function()
     presetEditor.Visible=not presetEditor.Visible
     zoneLiveInfo.Visible=not presetEditor.Visible
@@ -1971,6 +1993,48 @@ bind(nextWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=S.selectedWaypoint%#WAYPOINT_NAMES+1
     refreshPreset()
     savePresets()
+end)
+bind(addWalkPoint.MouseButton1Click,function()
+    if S.running then show("Stop the farm before recording a route");return end
+    local r=root()
+    if not r then show("Character position unavailable");return end
+    local name=selectedZone()
+    local p=S.presets[name] or {}
+    if not p.waypoint then show("Map this zone to a waypoint first");return end
+    local nodes=p.route or {}
+    if #nodes>=12 then show("Maximum 12 route points");return end
+    local previous=nodes[#nodes]
+    local cf=packCF(r.CFrame)
+    if previous then
+        local last=unpackCF(previous)
+        if last and (last.Position-r.Position).Magnitude<5 then
+            show("Walk at least 5 studs before adding another point")
+            return
+        end
+    end
+    local newRoute={}
+    for _,v in ipairs(nodes) do newRoute[#newRoute+1]=v end
+    newRoute[#newRoute+1]=cf
+    p.route=newRoute
+    S.presets[name]=p
+    S.overrides[name]=S.overrides[name] or {}
+    S.overrides[name].route=newRoute
+    local ok,err=savePresets()
+    refreshPreset()
+    show(ok and ("Saved walk point "..#newRoute.." for "..name) or
+        ("Route saved only in session: "..tostring(err)))
+end)
+bind(clearWalkRoute.MouseButton1Click,function()
+    if S.running then show("Stop the farm before changing routes");return end
+    local name=selectedZone()
+    S.presets[name]=S.presets[name] or {}
+    S.presets[name].route={}
+    S.overrides[name]=S.overrides[name] or {}
+    S.overrides[name].route={}
+    local ok,err=savePresets()
+    refreshPreset()
+    show(ok and ("Cleared walk route for "..name) or
+        ("Cleared only in session: "..tostring(err)))
 end)
 bind(mapWaypoint.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before editing mappings");return end
