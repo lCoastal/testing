@@ -35,7 +35,7 @@ local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGa
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
-    earlyTP=true,turbo=true,recentTimes={},
+    earlyTP=true,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
@@ -295,8 +295,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,371),
-    Position=UDim2.new(.5,-170,.5,-185),
+    Size=UDim2.fromOffset(340,414),
+    Position=UDim2.new(.5,-170,.5,-207),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -339,6 +339,8 @@ local logStatus=label("Logger: starting...",14,235,312,20,11,MUTED)
 local zoneStatus=label("Zone: "..zone(),14,255,312,20,11,MUTED)
 local perfStatus=label("Last cycle: --",14,278,312,43,11,MUTED)
 perfStatus.TextWrapped=true
+local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,329,312,27,12,FG)
+statsFooter.Font=Enum.Font.GothamBold
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -349,7 +351,11 @@ task.spawn(function()
         logStatus.Text=L.error and ("Logger error: "..tostring(L.error):sub(1,27))
             or string.format("Logger: %d batches / %d minerals",L.pan,L.minerals)
         zoneStatus.Text="Zone: "..zone()
-        task.wait(.5)
+        local currentPan=S.cycles+(S.running and 1 or 0)
+        local collected=L.minerals+#L.pending
+        local avg=S.cycles>0 and string.format("%.2fs",S.totalCycleTime/S.cycles) or "--"
+        statsFooter.Text=string.format("Pan: %d  |  Minerals: %d  |  Avg: %s",currentPan,collected,avg)
+        task.wait(.25)
     end
 end)
 
@@ -526,6 +532,7 @@ local function farming(id,r,target)
         S.waiting=false
         S.cycles+=1
         local total=os.clock()-cycleStart
+        S.totalCycleTime+=total
         local recent=S.recentTimes
         recent[#recent+1]=total
         if #recent>10 then table.remove(recent,1) end
@@ -616,7 +623,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,371)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,414)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
