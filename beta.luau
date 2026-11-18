@@ -283,7 +283,8 @@ S.dredge=false;S.dredgePurifying=false;S.dredgeRisk=false
 S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAppliedCap="UNSET"
 S.dredgeUncappedLuck=nil;S.dredgeLuckReadyAt=0
 S.dredgeTravelFailed={};S.dredgeWarped={}
-S.dredgeCapLastAt=0;S.dredgeTurnAttempts=0
+S.dredgeCapLastAt=-math.huge;S.dredgeCapLockedZone=nil
+S.dredgeCapLockedKey=nil;S.dredgeTurnAttempts=0
 local dredgeButton,dredgeStatus,show,stop
 local function dredgeText(str)
     if dredgeStatus then dredgeStatus.Text=str end
@@ -681,27 +682,45 @@ local function dredgeCycle(id)
     if not wants then dredgeText(tostring(done));return false end
     if done then
         if not S.dredgeTalkAt then
-            S.dredgeTalkAt=os.clock();S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
+            if os.clock()<(S.dredgeTurnRetryAt or 0) then return false end
+            if (S.dredgeTurnAttempts or 0)>=2 then
+                if stop then stop() end
+                dredgeText("Stopped: unable to reach Dredge Master for turn-in")
+                return false
+            end
+            S.dredgeTurnAttempts=(S.dredgeTurnAttempts or 0)+1
+            S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
+            S.dredgeCapLockedZone=nil
             escapeZone()
-            if goWaypoint("Dredge Master",id) then
-                local remote=questsRemote()
-                local talk=remote and remote:FindFirstChild("QuestTalked")
-                if talk and talk:IsA("RemoteEvent") then
-                    pcall(function() talk:FireServer("DredgeMaster") end)
-                    dredgeText("Finished Dredge: talked to NPC")
+            local traveled=goWaypoint("Dredge Master",id)
+            local rem=questsRemote()
+            local talk=rem and rem:FindFirstChild("QuestTalked")
+            if traveled and talk and talk:IsA("RemoteEvent") then
+                local sent=pcall(function() talk:FireServer("DredgeMaster") end)
+                if sent then
+                    S.dredgeTalkAt=os.clock()
+                    dredgeText("Talked to Dredge Master; checking next quest")
+                else
+                    S.dredgeTurnRetryAt=os.clock()+6
+                    dredgeText("QuestTalked failed; one retry available")
                 end
-            else dredgeText("Could not travel to Dredge Master") end
+            else
+                S.dredgeTurnRetryAt=os.clock()+6
+                dredgeText("Could not reach Dredge Master; one retry available")
+            end
         elseif not S.dredgeNextAt and os.clock()-S.dredgeTalkAt>3 then
-            S.dredgeNextAt=os.clock();startQuest(id)
-            dredgeText("Requested next quest, verifying progress")
+            S.dredgeNextAt=os.clock()
+            startQuest(id)
+            dredgeText("Requested next quest; verifying new collection objectives")
         elseif S.dredgeNextAt and os.clock()-S.dredgeNextAt>12 then
             escapeZone()
             if stop then stop() end
-            dredgeText("Quest transition unverified: stopped retries")
+            dredgeText("Quest transition unverified; stopped further requests")
         end
         return false
     end
     S.dredgeTalkAt=nil;S.dredgeNextAt=nil
+    S.dredgeTurnAttempts=0;S.dredgeTurnRetryAt=nil
     local st=P:FindFirstChild("Stats")
     local raw=st and tonumber(st:GetAttribute("Luck"))
     local capacityNow=capacity()
@@ -798,12 +817,22 @@ local function dredgeCycle(id)
         end
         S.dredgeTravelRetryAt=nil
         S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
+        if S.dredgeCapLockedZone~=targetZone then
+            S.dredgeCapLockedZone=nil
+            S.dredgeCapLockedKey=nil
+        end
         S.dredgeCapLastAt=-math.huge -- a new zone needs its optimal cap immediately
         S.activeZone=targetZone
     end
     local capKey=S.dredgeTargetCap and tostring(S.dredgeTargetCap) or "NONE"
-    if S.dredgeAppliedCap~=capKey and
-        (S.dredgeAt~=targetZone or os.clock()-(S.dredgeCapLastAt or 0)>20) then
+    -- Once a cap is selected for a deposit, freeze it there.
+    -- A 10% quest progress replan can change odds, but should not repeatedly
+    -- send cap updates for the SAME zone. A new zone/quest unlocks a new cap.
+    if S.dredgeCapLockedZone==targetZone and S.dredgeCapLockedKey then
+        capKey=S.dredgeCapLockedKey
+        S.dredgeTargetCap=capKey=="NONE" and nil or tonumber(capKey)
+    end
+    if S.dredgeAppliedCap~=capKey then
         local rs=RS:FindFirstChild("Remotes")
         local settings=rs and rs:FindFirstChild("Settings")
         local remote=settings and settings:FindFirstChild("ChangeSetting")
@@ -817,7 +846,9 @@ local function dredgeCycle(id)
         if not pcall(function() remote:FireServer("MaximumLuck",capText) end) then return false end
         S.dredgeAppliedCap=capKey
         S.dredgeCapLastAt=os.clock()
-        print("[GALAXIS DREDGE] Luck Cap applied:",capText)
+        S.dredgeCapLockedZone=targetZone
+        S.dredgeCapLockedKey=capKey
+        print("[GALAXIS DREDGE] Luck Cap applied once for zone:",targetZone,capText)
         if not pause(.2,id) then return false end
     end
     dredgeText(targetZone.." | cap "..tostring(S.dredgeTargetCap or "NONE")
@@ -1297,6 +1328,7 @@ stop=function()
         end
     end
     S.dredgeAppliedCap="UNSET";S.dredgeUncappedLuck=nil
+    S.dredgeCapLockedZone=nil;S.dredgeCapLockedKey=nil
     S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
     if hadDredge and S.dredgeRestore then
@@ -1697,6 +1729,8 @@ local function startWorker(asDredge)
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.dredgeCapLockedZone=nil;S.dredgeCapLockedKey=nil
+        S.dredgeTurnAttempts=0;S.dredgeTurnRetryAt=nil
         S.dredgeCapLastAt=-math.huge
         S.dredgeLastStepQuery=-math.huge
         S.dredgeUncappedLuck=nil
