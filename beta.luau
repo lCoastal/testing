@@ -305,12 +305,18 @@ function S.diagSnapshot()
     end
     local pos=r and string.format("%.1f,%.1f,%.1f",
         r.Position.X,r.Position.Y,r.Position.Z) or "N/A"
-    return string.format("phase=%s pan=%s fill=%s capacity=%s pos=%s distDig=%s distWater=%s dredge=%s running=%s zone=%s waiting=%s completed=%s rewards=%s cycles=%s",
+    local digIdle=S.diagDigProgressAt and
+        string.format("%.2f",os.clock()-S.diagDigProgressAt) or "N/A"
+    local collectPending=S.diagCollectPendingAt and
+        string.format("%.2f",os.clock()-S.diagCollectPendingAt) or "no"
+    return string.format("phase=%s pan=%s fill=%s capacity=%s pos=%s distDig=%s distWater=%s dredge=%s running=%s zone=%s waiting=%s completed=%s rewards=%s cycles=%s digIdleSec=%s collectPendingSec=%s lastCollectMs=%s lastCollectResult=%s",
         tostring(S.diagPhase or "Idle"),tostring(pan and pan.tool.Name or "NOT EQUIPPED"),
         tostring(f),tostring(cap),pos,distance(S.dig),distance(S.water),
         tostring(S.dredge),tostring(S.running),
         tostring(S.dredgeAt or S.activeZone),tostring(S.waiting),
-        tostring(S.completed),tostring(S.rewards),tostring(S.cycles))
+        tostring(S.completed),tostring(S.rewards),tostring(S.cycles),
+        digIdle,collectPending,tostring(S.diagLastCollectMs or "N/A"),
+        tostring(S.diagLastCollectResult or "N/A"))
 end
 function S.diagReport()
     local lines={
@@ -319,6 +325,8 @@ function S.diagReport()
         "Only local pan/position/cycle data; no remote packets or credentials.",
         "CURRENT: "..S.diagSnapshot(),
         "Last failure: "..tostring(S.diagLastFailure or "None"),
+        "Dig calls this pan: "..tostring(S.diagDigCalls or 0),
+        "Dig stall count: "..tostring(S.diagDigStalls or 0),
         "Current task: "..tostring(S.dredgeCurrentWork),
         "Next task: "..tostring(S.dredgeNextWork),
         "Quest status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status),
@@ -2113,12 +2121,29 @@ local function farming(id,r,target)
         -- before firing the normal rapid Collect calls. Normal pans unchanged.
         if freshlyChanged and not pause(.42,id) then return end
         local lastProgress=os.clock()
+        local lastStallLog=lastProgress
+        S.diagDigProgressAt=lastProgress
+        S.diagDigCalls=0
         for _=1,CFG.maxDig do
             if not valid(id) then return end
             local before=fill(r)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
-            local ok=invoke(r.dig,id,1)
+            -- Track the interval spent waiting for Collect's SERVER response.
+            -- This records lag without changing request cadence or timing.
+            local sentAt=os.clock()
+            S.diagCollectPendingAt=sentAt
+            local ok,response=invoke(r.dig,id,1)
+            local elapsed=os.clock()-sentAt
+            S.diagCollectPendingAt=nil
+            S.diagLastCollectMs=math.floor(elapsed*1000+.5)
+            S.diagLastCollectResult=tostring(response)
+            S.diagDigCalls+=1
+            if elapsed>=.65 then
+                S.diagEvent("COLLECT_SLOW",
+                    string.format("%.2fs %s before=%s after=%s",
+                        elapsed,tostring(response),tostring(before),tostring(fill(r))))
+            end
             if not ok then
                 S.diagEvent("COLLECT_CALL_FAILED",S.diagSnapshot())
                 return "Collect failed"
@@ -2129,11 +2154,28 @@ local function farming(id,r,target)
             local after=fill(r)
             if after and after>before+.001 then
                 lastProgress=os.clock()
-            elseif not pause(timing("dig"),id) then
-                return
+                S.diagDigProgressAt=lastProgress
+                lastStallLog=lastProgress
+            else
+                local now=os.clock()
+                if now-lastProgress>=.55 and now-lastStallLog>=.55 then
+                    lastStallLog=now
+                    S.diagEvent("DIG_NO_PROGRESS",string.format(
+                        "%.2fs unchanged at %s/%s; Collect reply=%s",
+                        now-lastProgress,tostring(after),tostring(target),
+                        tostring(response)))
+                end
+                if not pause(timing("dig"),id) then return end
             end
-            if os.clock()-lastProgress>CFG.digStall then return "Digging stalled" end
+            if os.clock()-lastProgress>CFG.digStall then
+                S.diagDigStalls=(S.diagDigStalls or 0)+1
+                S.diagEvent("DIG_STALLED","last fill="..tostring(fill(r))..
+                    " target="..tostring(target)..
+                    " last Collect ms="..tostring(S.diagLastCollectMs))
+                return "Digging stalled"
+            end
         end
+        S.diagCollectPendingAt=nil
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then
             S.diagEvent("PAN_NOT_FULL",S.diagSnapshot())
