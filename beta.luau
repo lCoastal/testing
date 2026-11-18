@@ -7,6 +7,7 @@ local P = game:GetService("Players").LocalPlayer
 local UIS = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
+local PathfindingService = game:GetService("PathfindingService")
 local E = getgenv()
 if E.CoastalSafeFarm and E.CoastalSafeFarm.Close then
     pcall(function() E.CoastalSafeFarm:Close() end)
@@ -280,6 +281,9 @@ local DROPS=HttpService:JSONDecode(DREDGE_ODDS)
 local ALL_ZONES,POOL,SHARES={},{},{}
 S.dredge=false;S.dredgePurifying=false;S.dredgeRisk=false
 S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAppliedCap="UNSET"
+S.dredgeUncappedLuck=nil;S.dredgeLuckReadyAt=0
+S.dredgeTravelFailed={};S.dredgeWarped={}
+S.dredgeCapLastAt=0;S.dredgeTurnAttempts=0
 local dredgeButton,dredgeStatus,show,stop
 local function dredgeText(str)
     if dredgeStatus then dredgeStatus.Text=str end
@@ -525,18 +529,32 @@ local function getQuest()
     return nil
 end
 local function remaining(state)
-    if type(state)~="table" or type(state.StepProgress)~="table" then return nil,"Progress not available" end
-    local merged,found,done={},false,true
-    for _,p in ipairs(state.StepProgress) do
-        if type(p)=="table" and tonumber(p.Amount) then
-            local left=math.max(0,math.ceil(tonumber(p.Amount)-(tonumber(p.Progress) or 0)-1e-7))
-            if left>0 then done=false end
-            if type(p.Collect)=="string" and p.Collect~="" then
-                found=true;merged[p.Collect]=(merged[p.Collect] or 0)+left
-            elseif left>0 then return nil,"Non-mineral objective" end
+    if type(state)~="table" or type(state.StepProgress)~="table" then
+        return nil,"Progress not available"
+    end
+    local merged,collectSeen,hasTalk,done={},false,false,true
+    -- Dredge quests have a collection step followed by a separate Talk step.
+    -- When the collection step advances, the cache no longer has Collect entries.
+    for _,p in pairs(state.StepProgress) do
+        if type(p)=="table" then
+            local qty=tonumber(p.Amount)
+            local progress=tonumber(p.Progress) or 0
+            if p.Talk=="DredgeMaster" then
+                hasTalk=true
+            elseif type(p.Collect)=="string" and p.Collect~="" and qty then
+                collectSeen=true
+                local left=math.max(0,math.ceil(qty-progress-1e-7))
+                merged[p.Collect]=(merged[p.Collect] or 0)+left
+                if left>0 then done=false end
+            elseif qty and qty>progress then
+                return nil,"Unexpected non-mineral objective"
+            end
         end
     end
-    if not found then return nil,"No collection objectives" end
+    if hasTalk then return {},true end
+    local step=tonumber(state.Step or state.CurrentStep or state.StepNumber)
+    if step and step>=2 then return {},true end
+    if not collectSeen then return nil,"No collect entries; checking server step" end
     local list={}
     for name,n in pairs(merged) do if n>0 then list[#list+1]={m=name,n=n} end end
     table.sort(list,function(a,b) return a.m<b.m end)
@@ -566,9 +584,46 @@ local function goWaypoint(wp,id)
         local travel=misc and misc:FindFirstChild("FastTravel")
         if not travel or not travel:IsA("RemoteEvent") then return false end
         if not pcall(function() travel:FireServer(from,to) end) then return false end
-        if not pause(.5,id) then return false end
+        if not pause(1.0,id) then return false end
     end
-    return true
+    return valid(id)
+end
+-- Walking is only tried for nearby zone transitions, never per-pan farming.
+local function pathTo(cf,id)
+    local ch=P.Character
+    local r=root()
+    local hum=ch and ch:FindFirstChildOfClass("Humanoid")
+    if not r or not hum or hum.Health<=0 then return false end
+    local d=cf.Position-r.Position
+    if d.Magnitude<7 then return true end
+    if d.Magnitude>110 or math.abs(d.Y)>18 then return false end
+    local path=PathfindingService:CreatePath({
+        AgentRadius=2,AgentHeight=5,AgentCanJump=true,WaypointSpacing=6
+    })
+    if not pcall(function() path:ComputeAsync(r.Position,cf.Position) end)
+        or path.Status~=Enum.PathStatus.Success then return false end
+    local nodes=path:GetWaypoints()
+    if #nodes==0 or #nodes>36 then return false end
+    local deadline=os.clock()+math.min(12,3+d.Magnitude/9)
+    for _,wp in ipairs(nodes) do
+        if not valid(id) or os.clock()>deadline then return false end
+        r=root()
+        if not r then return false end
+        if (r.Position-wp.Position).Magnitude>4 then
+            if wp.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
+            hum:MoveTo(wp.Position)
+            local limit=math.min(deadline,os.clock()+2.8)
+            while valid(id) and os.clock()<limit do
+                r=root()
+                if not r then return false end
+                if (r.Position-wp.Position).Magnitude<=4 then break end
+                task.wait(.06)
+            end
+            if not r or (r.Position-wp.Position).Magnitude>6 then return false end
+        end
+    end
+    r=root()
+    return r~=nil and (r.Position-cf.Position).Magnitude<10
 end
 local function safeDig()
     local x=S.presets["Fortune River"]
@@ -636,7 +691,19 @@ local function dredgeCycle(id)
         dredgeText("Stats.Luck/Capacity unavailable");return false
     end
     -- Script-controlled Pan/Shake reaches 100% quality: no built-in Auto Pan 2/3 penalty.
-    local L=math.max(1,raw)
+    -- Capture uncapped Luck once. A capped Stats.Luck value must NOT feed
+    -- back into the optimizer (that caused Luck Cap oscillation).
+    if os.clock()<S.dredgeLuckReadyAt then
+        dredgeText("Waiting for uncapped Luck to replicate")
+        return false
+    end
+    if not S.dredgeUncappedLuck then
+        S.dredgeUncappedLuck=raw
+        dredgeText("Planning from uncapped Luck "..string.format("%.1f",raw))
+    elseif S.dredgeAppliedCap=="NONE" and raw>S.dredgeUncappedLuck*1.01 then
+        S.dredgeUncappedLuck=raw
+    end
+    local L=math.max(1,S.dredgeUncappedLuck)
     local need={}
     for _,w in ipairs(wants) do need[w.m]=w.n end
     local keep=false
@@ -682,16 +749,42 @@ local function dredgeCycle(id)
         return false
     end
     if S.dredgeAt~=targetZone then
-        dredgeText("Travel: "..targetZone.." via "..tostring(p.waypoint))
-        if not goWaypoint(p.waypoint,id) then dredgeText("Warp request failed");return false end
         S.dig=unpackCF(p.dig);S.water=unpackCF(p.water)
-        if not S.dig or not S.water or not move(S.dig,id) then
-            dredgeText("Zone destination teleport rejected");return false
+        if not S.dig or not S.water then
+            dredgeText("Zone coordinates missing");return false
         end
+        if S.dredgeTravelRetryAt and os.clock()<S.dredgeTravelRetryAt then
+            dredgeText("Travel cooldown - preventing warp spam");return false
+        end
+        dredgeText("Moving to "..targetZone)
+        local arrived=pathTo(S.dig,id)
+        if not arrived then arrived=move(S.dig,id) end
+        if not arrived and not S.dredgeWarped[targetZone] then
+            S.dredgeWarped[targetZone]=true
+            dredgeText("One-time fallback waypoint: "..tostring(p.waypoint))
+            if goWaypoint(p.waypoint,id) then
+                arrived=pathTo(S.dig,id)
+                if not arrived then arrived=move(S.dig,id) end
+            end
+        end
+        if not arrived then
+            local tries=(S.dredgeTravelFailed[targetZone] or 0)+1
+            S.dredgeTravelFailed[targetZone]=tries
+            S.dredgeTravelRetryAt=os.clock()+8
+            dredgeText("Travel failed "..tries.."/2: "..targetZone)
+            if tries>=2 and stop then
+                stop()
+                dredgeText("Stopped after two failed zone moves")
+            end
+            return false
+        end
+        S.dredgeTravelRetryAt=nil
         S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
         S.activeZone=targetZone
     end
-    if S.dredgeAppliedCap~=S.dredgeTargetCap then
+    local capKey=S.dredgeTargetCap and tostring(S.dredgeTargetCap) or "NONE"
+    if S.dredgeAppliedCap~=capKey and
+        (S.dredgeAt~=targetZone or os.clock()-(S.dredgeCapLastAt or 0)>20) then
         local rs=RS:FindFirstChild("Remotes")
         local settings=rs and rs:FindFirstChild("Settings")
         local remote=settings and settings:FindFirstChild("ChangeSetting")
@@ -703,7 +796,9 @@ local function dredgeCycle(id)
             capText=tostring(S.dredgeTargetCap):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
         end
         if not pcall(function() remote:FireServer("MaximumLuck",capText) end) then return false end
-        S.dredgeAppliedCap=S.dredgeTargetCap
+        S.dredgeAppliedCap=capKey
+        S.dredgeCapLastAt=os.clock()
+        print("[GALAXIS DREDGE] Luck Cap applied:",capText)
         if not pause(.2,id) then return false end
     end
     dredgeText(targetZone.." | cap "..tostring(S.dredgeTargetCap or "NONE")
@@ -1004,7 +1099,16 @@ stop=function()
     if not S.alive then return end
     local hadDredge=S.dredge
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
-    S.dredgeAt=nil;S.dredgeRiskZone=false;S.dredgeAppliedCap="UNSET"
+    S.dredgeAt=nil;S.dredgeRiskZone=false
+    if hadDredge and S.dredgeAppliedCap~="NONE" then
+        local rem=RS:FindFirstChild("Remotes")
+        local setting=rem and rem:FindFirstChild("Settings")
+        local change=setting and setting:FindFirstChild("ChangeSetting")
+        if change and change:IsA("RemoteEvent") then
+            pcall(function() change:FireServer("MaximumLuck","None") end)
+        end
+    end
+    S.dredgeAppliedCap="UNSET";S.dredgeUncappedLuck=nil
     S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
     if hadDredge and S.dredgeRestore then
@@ -1405,9 +1509,23 @@ local function startWorker(asDredge)
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.dredgeUncappedLuck=nil
+        S.dredgeWarped={};S.dredgeTravelFailed={};S.dredgeTravelRetryAt=nil
         S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
         S.dredgePlannedRemaining=nil
         S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
+        -- Remove preexisting Luck Caps before the first planning snapshot.
+        local rem=RS:FindFirstChild("Remotes")
+        local setting=rem and rem:FindFirstChild("Settings")
+        local change=setting and setting:FindFirstChild("ChangeSetting")
+        if not change or not change:IsA("RemoteEvent") then
+            S.dredge=false;dredgeText("Luck Cap remote missing");return
+        end
+        if not pcall(function() change:FireServer("MaximumLuck","None") end) then
+            S.dredge=false;dredgeText("Failed to clear previous cap");return
+        end
+        S.dredgeAppliedCap="NONE"
+        S.dredgeLuckReadyAt=os.clock()+2.0
         dredgeButton.Text="AUTO DREDGE: ON"
         dredgeText("Starting / reading Dredge quest")
     else
