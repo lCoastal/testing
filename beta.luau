@@ -2584,8 +2584,8 @@ local function farming(id,r,target)
             return "Pan not full"
         end
         if S.dredge then
-            -- Fill is already replicated; a short confirmation is enough.
-            if not pause(.08,id) then return end
+            -- Collect's acknowledged Fill progress is already replicated.
+            -- Verify it immediately instead of adding 80ms every pan.
             local finalFill=fill(r)
             if not finalFill or finalFill<target-.01 then
                 return "Dig fill not confirmed"
@@ -2699,7 +2699,7 @@ local function farming(id,r,target)
             -- One short grace period after the authoritative completion event.
             -- No second 0.52-second wait; the reward fallback has already
             -- waited sufficiently if no completion event fired.
-            if not pause(.16,id) then return end
+            if not pause(.10,id) then return end
         end
         local shakeTime=os.clock()-shakeStart
         S.traceEnd("SHAKE_LOOP","rewards="..tostring(S.rewards)..
