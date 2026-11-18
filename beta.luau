@@ -37,7 +37,7 @@ local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGa
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,selling=false,doubleShake=true,
-    earlyTP=true,turbo=true,recentTimes={},totalCycleTime=0,
+    earlyTP=false,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
@@ -785,6 +785,31 @@ end
 local function pathTo(cf,id)
     -- Short-range walking for NPC prompts and local movement.
     return walkRoute(cf,id,135)
+end
+-- In Dredge mode, walk between the saved dig/water coordinates.
+-- Manual Auto Farm still uses its original fast move().
+local function farmMove(cf,id)
+    if not S.dredge then return move(cf,id) end
+    local r=root()
+    local humanoid=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+    if not r or not humanoid or humanoid.Health<=0 then return false end
+    local dist=(r.Position-cf.Position).Magnitude
+    if dist<7 then return stableAt(cf,id,9,.45,2) end
+    if dist<=46 and math.abs(r.Position.Y-cf.Position.Y)<=13 then
+        humanoid:MoveTo(cf.Position)
+        local deadline=os.clock()+math.clamp(dist/math.max(8,humanoid.WalkSpeed)*2.8+2,4,13)
+        while valid(id) and os.clock()<deadline do
+            r=root()
+            if not r then return false end
+            if (r.Position-cf.Position).Magnitude<8 then
+                return stableAt(cf,id,10,.45,1.6)
+            end
+            task.wait(.075)
+        end
+    end
+    local arrived,err=walkRoute(cf,id,215)
+    if not arrived then warn("[GALAXIS DREDGE] Local walk failed:",tostring(err)) end
+    return arrived
 end
 local function goWaypoint(wp,id)
     local folder=waypointFolder()
@@ -1728,7 +1753,7 @@ local function farming(id,r,target)
         if newCapacity and newCapacity>0 then target=newCapacity end
         local cycleStart=os.clock()
         show("Digging")
-        if not move(S.dig,id) then return "Dig teleport failed" end
+        if not farmMove(S.dig,id) then return "Could not reach dig position" end
         local freshlyChanged=S.dredge and S.dredgeAt and
             (S.cycles-(S.dredgeZoneCycle or 0))<2
         -- After a zone switch, give the new deposit enough time to register
@@ -1755,11 +1780,18 @@ local function farming(id,r,target)
         end
         if not valid(id) then return end
         if (fill(r) or 0)<target-.01 then return "Pan not full" end
+        if S.dredge then
+            if not pause(.28,id) then return end
+            local finalFill=fill(r)
+            if not finalFill or finalFill<target-.01 then
+                return "Dig fill not confirmed"
+            end
+        end
         local digTime=os.clock()-cycleStart
 
         show("Panning")
         local waterStart=os.clock()
-        if not move(S.water,id) then return "Water teleport failed" end
+        if not farmMove(S.water,id) then return "Could not reach water" end
         if freshlyChanged and not pause(.5,id) then return end
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
@@ -1780,14 +1812,22 @@ local function farming(id,r,target)
         local earlyMoved=false
         local earlyTime=0
         local function finished()
-            return S.completed or (S.rewards>0 and os.clock()-S.lastReward>=CFG.rewardGap)
+            local now=os.clock()
+            if not S.dredge then
+                return S.completed or (S.rewards>0 and now-S.lastReward>=CFG.rewardGap)
+            end
+            if S.completed then
+                return S.rewards==0 or now-S.lastReward>=.52
+            end
+            return S.rewards>0 and now-panStart>=2 and
+                now-S.lastReward>=1.4
         end
         -- Experimental early travel after first two rewards and a very short lull.
         -- Starts at ~30ms of quiet instead of ~165ms. If leaving water
         -- interrupts remaining rewards, switch Early TP OFF for that zone.
         -- No further shake packets are sent after teleporting.
         local function tryEarlyMove()
-            if not S.earlyTP or earlyMoved or S.completed or S.rewards<2
+            if S.dredge or not S.earlyTP or earlyMoved or S.completed or S.rewards<2
                 or freshlyChanged then return false end
             if os.clock()-S.lastReward < math.max(.03,CFG.rewardGap*.10) then return false end
             show("Early teleport (test)")
@@ -1829,6 +1869,16 @@ local function farming(id,r,target)
         end
         if not done then return "No completion detected" end
         if not valid(id) then return end
+        if S.dredge then
+            local untilQuiet=os.clock()+.52
+            while valid(id) and os.clock()<untilQuiet do
+                if S.rewards>0 and os.clock()-S.lastReward<.52 then
+                    untilQuiet=os.clock()+.52
+                end
+                task.wait(.05)
+            end
+            if not valid(id) then return end
+        end
         local shakeTime=os.clock()-shakeStart
 
         S.waiting=false
