@@ -271,6 +271,430 @@ local function move(cf,id)
     return false
 end
 
+-- ===== DREDGE AUTO: INLINED TOOLKIT OPTIMIZER =====
+-- Uses the same FITTED (not server-confirmed) luck model as your site.
+-- Embedded mineral odds, no requests to the toolkit or separate Lua files.
+local CAPS={1,5,10,25,50,100,250,500,1000,2500,5000,10000,25000,50000,100000}
+local DREDGE_ODDS=[==[{"Azuralite Oasis":[["Copper",0.369786],["Gold",0.369786],["Amethyst",0.046223],["Azuralite",0.004622],["Inferlume",7.396e-8],["Ashvein",0.00009245],["Emerald",0.000027729999999999997],["Borealite",0.00004622],["Aetherite",0.000001156],["Silver",0.184893],["Neodymium",0.013867],["Smoky Quartz",0.009245],["Malachite",0.0009245000000000001],["Onyx",0.00046219999999999996],["Prismara",2.773e-8],["Osmium",0.00001387],["Palladium",9.245e-7],["Luminum",0.0000055469999999999996],["Vortessence",7.396e-8],["Uranium",0.000002311],["Starshine",9.245e-7]],"Crystal Cavern River":[["Copper",0.338491],["Gold",0.423114],["Amethyst",0.042310999999999994],["Azuralite",0.0042309999999999995],["Inferlume",6.77e-8],["Ashvein",0.00008462000000000001],["Emerald",0.00002539],["Borealite",0.000042310000000000007],["Aetherite",0.000001269],["Silver",0.169246],["Neodymium",0.012693000000000001],["Smoky Quartz",0.008461999999999999],["Malachite",0.0008462],["Onyx",0.0004231],["Osmium",0.000012689999999999999],["Palladium",8.462e-7],["Luminum",0.000012689999999999999],["Vortessence",6.77e-8],["Starshine",8.462e-7]],"Abyssal Depth":[["Copper",0.242347],["Gold",0.484694],["Azuralite",0.004847000000000001],["Emerald",0.00002908],["Aurorite",0.00001454],["Cobalt",0.00001939],["Aetherite",0.000002423],["Amber",0.0004847],["Gloomberry",0.000004847],["Silver",0.242347],["Neodymium",0.014541],["Smoky Quartz",0.009694000000000001],["Malachite",0.0009694],["Painite",2.908e-8],["Lightshard",0.000004847],["Specterite",0.0000014540000000000002],["Radiant Gold",1.454e-8],["Starshine",4.847e-7],["Umbrite",1.454e-9]],"Deeproot Spring":[["Copper",0.22591999999999998],["Gold",0.45183999999999996],["Azuralite",0.0045179999999999994],["Emerald",0.00002711],["Aurorite",0.00001356],["Cobalt",0.00001807],["Aetherite",0.000002259],["Glowberry",0.067776],["Amber",0.0004518],["Glowmoss",0.000004518],["Chrysoberyl",1.807e-8],["Silver",0.22591999999999998],["Neodymium",0.013555],["Smoky Quartz",0.009037],["Malachite",0.0009037],["Luminum",0.000005422],["Lightshard",0.000004518],["Specterite",0.0000013559999999999998],["Radiant Gold",9.037e-9],["Starshine",4.5179999999999996e-7],["Vineheart",1.807e-9]],"Fungal Marsh":[["Copper",0.271237],["Gold",0.542473],["Emerald",0.0000434],["Cobalt",0.0000217],["Diamond",0.000005425],["Bone",0.00010850000000000001],["Electrum",0.027124000000000002],["Diopside",0.0005425],["Bismuth",0.000001627],["Astral Spore",6.509999999999999e-10],["Gloomcap",0.0000027119999999999996],["Smoky Quartz",0.043398000000000006],["Malachite",0.005425],["Onyx",0.001085],["Mythril",3.7969999999999995e-8],["Osmium",0.00002712],["Mercury",0.00001085],["Star Garnet",1.356e-8],["Red Beryl",8.137e-9],["Titanium",0.10849500000000001]],"Overgrown Grotto":[["Copper",0.233408],["Gold",0.466816],["Azuralite",0.004668],["Emerald",0.00002801],["Aurorite",0.000014],["Cobalt",0.00001867],["Aetherite",0.000002334],["Glowberry",0.037345],["Glowmoss",0.000004668],["Chrysoberyl",1.4e-8],["Silver",0.233408],["Neodymium",0.014004],["Smoky Quartz",0.009336],["Malachite",0.0009336],["Prismara",2.801e-8],["Luminum",0.000005602],["Lightshard",0.000004668],["Specterite",0.0000014],["Starshine",4.668e-7]],"Rotwood Swamp":[["Copper",0.271237],["Gold",0.542473],["Emerald",0.0000434],["Cobalt",0.0000217],["Diamond",0.000005425],["Chrysoberyl",2.17e-8],["Bone",0.00010850000000000001],["Bloodstone",8.68e-10],["Electrum",0.027124000000000002],["Diopside",0.0005425],["Bismuth",0.000001627],["Smoky Quartz",0.043398000000000006],["Malachite",0.005425],["Onyx",0.001085],["Mythril",3.7969999999999995e-8],["Osmium",0.00002712],["Specterite",0.0000027119999999999996],["Mercury",0.00001085],["Star Garnet",1.085e-8],["Titanium",0.10849500000000001]],"Haunted Creek":[["Copper",0.21613],["Gold",0.432261],["Emerald",0.000034580000000000004],["Aurorite",0.00002161],["Cobalt",0.000017290000000000002],["Diamond",0.000004323],["Aetherite",0.000001297],["Bone",0.00008645],["Silver",0.21613],["Smoky Quartz",0.034581],["Malachite",0.0008645],["Lapis Lazuli",0.0004323],["Painite",3.458e-8],["Lightshard",0.000008645000000000001],["Specterite",0.000002161],["Radiant Gold",1.297e-8],["Rock Candy",0.012968],["Lost Soul",0.000004323],["Pumpkin Soul",4.323e-9],["Moonspire",2.161e-10],["Titanium",0.08645200000000001],["Vortessence",2.1610000000000003e-8]],"Infernal Heart":[["Copper",0.22104700000000002],["Dinosaur Skull",1.842e-8],["Inferlume",1.1049999999999999e-7],["Flarebloom",1.1049999999999999e-7],["Cinnabar",0.00000221],["Fire Opal",0.000002947],["Dragon Bone",0.000014740000000000001],["Obsidian",0.736822],["Peridot",0.0007367999999999999],["Onyx",0.001474],["Pyrelith",0.002947],["Painite",2.2099999999999998e-7],["Pyronium",0.00004421],["Osmium",0.000022100000000000002],["Opal",0.000022100000000000002],["Rose Gold",0.0000044210000000000005],["Topaz",0.022105],["Zircon",0.014736],["Volcanic Core",7.368e-8],["Uranium",0.0000044210000000000005],["Volcanic Key",0.000014740000000000001]],"Volcanic Springs":[["Copper",0.19197399999999998],["Gold",0.383949],["Inferlume",7.679e-8],["Flarebloom",2.7420000000000003e-8],["Cinnabar",0.000001097],["Fire Opal",0.000004388],["Catseye",0.000002742],["Obsidian",0.383949],["Peridot",0.0005485],["Onyx",0.001371],["Meteoric Iron",0.0024679999999999997],["Painite",1.645e-7],["Pyronium",0.00003839],["Osmium",0.00001645],["Opal",0.00001645],["Rose Gold",0.000005485000000000001],["Radium",0.000002194],["Topaz",0.02194],["Zircon",0.013712]],"Magma Furnace":[["Copper",0.17072900000000002],["Gold",0.34145899999999996],["Flarebloom",8.535999999999999e-8],["Cinnabar",0.000001138],["Fire Opal",0.000002845],["Dragon Bone",0.000008536000000000001],["Catseye",0.000002845],["Obsidian",0.455278],["Peridot",0.0005691],["Onyx",0.001138],["Pyrelith",0.002276],["Pyronium",0.00003415],["Osmium",0.00001707],["Opal",0.00001707],["Rose Gold",0.000005691],["Topaz",0.017073],["Zircon",0.011382000000000001],["Volcanic Core",4.5530000000000005e-8],["Volcanic Key",0.000005691]],"Volcanic Sands":[["Copper",0.170732],["Gold",0.34146299999999996],["Inferlume",7.967e-8],["Flarebloom",2.8459999999999998e-8],["Cinnabar",0.000001138],["Fire Opal",0.000002846],["Catseye",0.000002846],["Obsidian",0.455285],["Peridot",0.0005691],["Onyx",0.001138],["Meteoric Iron",0.002276],["Pink Diamond",2.276e-7],["Pyronium",0.00003415],["Osmium",0.00001707],["Opal",0.00001707],["Rose Gold",0.000005691],["Topaz",0.017073],["Zircon",0.011382000000000001]],"Tomb Vein I":[["Copper",0.101946],["Gold",0.34824800000000006],["Amethyst",0.035681],["Azuralite",0.002549],["Inferlume",1.631e-8],["Emerald",0.00003058],["Cinnabar",0.00001784],["Fire Opal",0.00002039],["Catseye",5.097e-7],["Bone",0.00005097],["Electrum",0.025487000000000003],["Aetherium",5.607e-9],["Agate",4.588e-9],["Eye of the Sands",5.097e-11],["Silver",0.07646],["Platinum",0.101946],["Obsidian",0.193698],["Smoky Quartz",0.020389],["Malachite",0.007645999999999999],["Ruby",0.010195000000000001],["Lapis Lazuli",0.003058],["Peridot",0.005097000000000001],["Onyx",0.001019],["Osmium",0.00025489999999999996],["Rose Gold",0.00002549],["Mercury",0.00003568],["Meteoric Gold",0.000010189999999999999],["Sandsteel",0.001529],["Selenite",0.0006117000000000001],["Jasper",0.000005097],["Key of Life",2.549e-11],["Solarium",1.529e-10],["Topaz",0.050973],["Starshine",0.000002549],["Natron Salt",0.010195000000000001],["Blue Faience",0.002039],["Scarab Amber",0.0007646],["Canopic Gold",0.00001529],["Ushabti",2.5490000000000002e-8]],"Tomb Vein II":[["Copper",0.093862],["Gold",0.266829],["Amethyst",0.031286999999999995],["Azuralite",0.004172],["Inferlume",2.607e-8],["Emerald",0.00005215],["Cinnabar",0.0000365],["Fire Opal",0.00004172],["Catseye",7.822000000000001e-7],["Bone",0.00007822],["Electrum",0.041717000000000004],["Aetherium",9.386e-9],["Agate",7.3e-9],["Eye of the Sands",8.343e-11],["Silver",0.073004],["Platinum",0.12515],["Obsidian",0.198154],["Smoky Quartz",0.026073],["Malachite",0.010428999999999999],["Ruby",0.018251],["Lapis Lazuli",0.004693],["Peridot",0.009386],["Onyx",0.001825],["Osmium",0.0004172],["Rose Gold",0.00004693],["Mercury",0.00005215],["Meteoric Gold",0.00001564],["Sandsteel",0.002607],["Selenite",0.001043],["Jasper",0.000007822],["Key of Life",4.172e-11],["Solarium",2.607e-10],["Topaz",0.078219],["Starshine",0.000004172],["Natron Salt",0.007822],["Blue Faience",0.0031290000000000003],["Scarab Amber",0.001564],["Canopic Gold",0.00003129],["Ushabti",1.043e-7]],"Tomb Vein III":[["Copper",0.085018],["Gold",0.20421199999999998],["Amethyst",0.028339],["Azuralite",0.005101],["Inferlume",4.534e-8],["Emerald",0.00011339999999999999],["Cinnabar",0.00007368],["Fire Opal",0.00007934999999999999],["Catseye",0.000001417],["Bone",0.0001417],["Electrum",0.056678],["Aetherium",1.7e-8],["Agate",1.247e-8],["Eye of the Sands",1.474e-10],["Silver",0.068014],["Platinum",0.147364],["Obsidian",0.19270700000000002],["Smoky Quartz",0.028339],["Malachite",0.011335999999999999],["Ruby",0.028339],["Lapis Lazuli",0.005101],["Peridot",0.01417],["Onyx",0.0028339999999999997],["Osmium",0.00045339999999999996],["Rose Gold",0.00009069],["Mercury",0.00008502],["Meteoric Gold",0.000028340000000000003],["Sandsteel",0.004534],["Selenite",0.0017000000000000001],["Jasper",0.000014170000000000002],["Key of Life",7.368e-11],["Solarium",4.534e-10],["Topaz",0.102021],["Starshine",0.000006801],["Natron Salt",0.005667999999999999],["Blue Faience",0.004534],["Scarab Amber",0.0028339999999999997],["Canopic Gold",0.00006801],["Ushabti",2.834e-7],["Sky Iron",1.7e-7],["Eternal Lotus",1.134e-9]],"The Void (when in the loot pool)":[["Copper",0.181132],["Gold",0.181132],["Amethyst",0.181132],["Blue Ice",0.181132],["Coral",0.018113],["Jade",0.0009057],["Azuralite",0.0009057],["Glacial Quartz",0.0009057],["Inferlume",2.536e-8],["Flarebloom",2.536e-8],["Frostshard",2.536e-8],["Iridium",0.00003623],["Ammonite Fossil",0.00003623],["Ashvein",0.00003623],["Emerald",0.00003623],["Golden Pearl",0.00003623],["Borealite",0.00003623],["Aurorite",0.00003623],["Cobalt",0.00003623],["Cinnabar",0.0000018110000000000001],["Diamond",0.0000018110000000000001],["Fire Opal",0.0000018110000000000001],["Dragon Bone",0.0000018110000000000001],["Catseye",0.0000018110000000000001],["Aetherite",0.0000018110000000000001],["Aquamarine",0.0000018110000000000001],["Glowberry",0.018113],["Amber",0.0009057],["Glowmoss",0.00003623],["Chrysoberyl",2.536e-8],["Firefly Stone",0.0000018110000000000001],["Gloomberry",0.0009057],["Bone",0.00003623],["Electrum",0.018113],["Diopside",0.0009057],["Bismuth",0.0000018110000000000001],["Gloomcap",0.0000018110000000000001],["Candy Cane",0.0009057],["Depleted Shard",0.0000018110000000000001],["Aetherium",2.536e-8],["Agate",2.536e-8],["Pyrite",0.181132],["Silver",0.181132],["Platinum",0.181132],["Seashell",0.181132],["Obsidian",0.181132],["Pearl",0.181132],["Neodymium",0.018113],["Smoky Quartz",0.018113],["Malachite",0.018113],["Sapphire",0.018113],["Ruby",0.0009057],["Lapis Lazuli",0.0009057],["Silver Clamshell",0.0009057],["Peridot",0.0009057],["Onyx",0.0009057],["Meteoric Iron",0.0009057],["Pyrelith",0.0009057],["Pink Diamond",2.536e-8],["Painite",2.536e-8],["Prismara",2.536e-8],["Mythril",2.536e-8],["Moonstone",0.00003623],["Pyronium",0.00003623],["Osmium",0.00003623],["Opal",0.00003623],["Rose Gold",0.0000018110000000000001],["Palladium",0.0000018110000000000001],["Luminum",0.0000018110000000000001],["Lightshard",0.00003623],["Specterite",0.0000018110000000000001],["Radiant Gold",2.536e-8],["Rock Candy",0.018113],["Lost Soul",0.0000018110000000000001],["Mercury",0.00003623],["Star Garnet",2.536e-8],["Red Beryl",2.536e-8],["Peppermint Prism",0.0000018110000000000001],["Radium",0.0000018110000000000001],["Nickel",0.018113],["Meteoric Gold",0.00003623],["Nautilus Shell",0.0000018110000000000001],["Sandsteel",0.0009057],["Selenite",0.00003623],["Jasper",0.0000018110000000000001],["Titanium",0.018113],["Topaz",0.018113],["Zircon",0.018113],["Vortessence",2.536e-8],["Volcanic Core",2.536e-8],["Uranium",0.0000018110000000000001],["Volcanic Key",0.0000018110000000000001],["Starshine",0.0000018110000000000001],["Tourmaline",0.0000018110000000000001],["Sunstone",2.536e-8]],"Rubble Creek Sands":[["Gold",0.703167],["Amethyst",0.070317],["Iridium",0.0001406],["Emerald",0.000023440000000000003],["Aurorite",0.00005625],["Diamond",0.000001406],["Aetherite",9.375999999999999e-7],["Platinum",0.187511],["Ruby",0.002344],["Lapis Lazuli",0.0009375999999999999],["Meteoric Iron",0.0003281],["Pink Diamond",1.8749999999999998e-7],["Opal",0.000009376],["Rose Gold",0.000004688],["Titanium",0.023439],["Topaz",0.011719]],"Enchanted Ruins":[["Gold",0.583704],["Azuralite",0.005837],["Emerald",0.00003502],["Aurorite",0.00001751],["Cobalt",0.00002335],["Aetherite",0.000002919],["Glowberry",0.087556],["Amber",0.0005836999999999999],["Glowmoss",0.000005837],["Adamantine",1.167e-9],["Silver",0.291852],["Neodymium",0.017511000000000002],["Smoky Quartz",0.011674],["Malachite",0.001167],["Prismara",7.296e-9],["Mythril",2.919e-8],["Rose Gold",0.000014590000000000001],["Luminum",0.000007004],["Lightshard",0.000005837],["Specterite",0.000001751],["Radiant Gold",1.167e-8],["Starshine",5.837e-7]],"Fortune River":[["Gold",0.572323],["Jade",0.002862],["Iridium",0.00008585],["Emerald",0.00004579],["Aurorite",0.00008585],["Diamond",0.000002289],["Catseye",0.000001145],["Aetherite",5.723e-7],["Platinum",0.286161],["Sapphire",0.005723000000000001],["Ruby",0.002289],["Lapis Lazuli",0.0010299999999999999],["Meteoric Iron",0.0005723],["Pink Diamond",2.862e-7],["Painite",1.717e-7],["Osmium",0.00001431],["Opal",0.00002289],["Rose Gold",0.000005723],["Palladium",2.289e-7],["Titanium",0.114465],["Topaz",0.014308000000000001],["Uranium",0.000001717]],"Fortune River Delta":[["Gold",0.54716],["Coral",0.03283],["Jade",0.002189],["Iridium",0.000054720000000000005],["Golden Pearl",0.0001641],["Aurorite",0.000054720000000000005],["Diamond",0.0000054719999999999994],["Aetherite",0.0000013679999999999999],["Silver",0.27358],["Pearl",0.10943199999999999],["Neodymium",0.016415],["Smoky Quartz",0.010943000000000001],["Silver Clamshell",0.001094],["Onyx",0.0005472],["Pink Diamond",4.377e-7],["Painite",2.1889999999999998e-7],["Moonstone",0.000054720000000000005],["Palladium",8.207e-7],["Topaz",0.005472],["Vortessence",8.206999999999999e-8],["Uranium",0.0000027359999999999997]],"Meteor Falls":[["Gold",0.542536],["Jade",0.001085],["Iridium",0.0000434],["Cobalt",0.0000217],["Diamond",0.0000027129999999999997],["Electrum",0.027127],["Depleted Shard",5.425e-8],["Aetherium",5.425e-9],["Pyrite",0.271268],["Sapphire",0.043403],["Lapis Lazuli",0.005425],["Moonstone",0.000027130000000000003],["Opal",0.0005425],["Mercury",0.00001085],["Star Garnet",1.085e-8],["Radium",5.425e-7],["Nickel",0.10850699999999999],["Vortessence",1.6279999999999998e-8],["Sunstone",5.425e-9],["Starpiercer",2.17e-10]],"Starfall River":[["Gold",0.542536],["Jade",0.001085],["Iridium",0.0000434],["Aurorite",0.0000217],["Aquamarine",0.0000027129999999999997],["Electrum",0.027127],["Depleted Shard",5.425e-8],["Aetherium",5.425e-9],["Pyrite",0.271268],["Sapphire",0.043403],["Lapis Lazuli",0.005425],["Moonstone",0.000027130000000000003],["Opal",0.0005425],["Palladium",5.425e-7],["Star Garnet",1.085e-8],["Singularium",1.085e-10],["Nickel",0.10850699999999999],["Meteoric Gold",0.00001085],["Vortessence",1.6279999999999998e-8],["Sunstone",5.425e-9]],"Timelocked Sanctuary":[["Gold",0.5425260000000001],["Emerald",0.0000434],["Cobalt",0.0000217],["Diamond",0.000005425],["Aetherite",0.0000027129999999999997],["Glowmoss",0.000005425],["Firefly Stone",5.425e-8],["Bloodstone",5.425e-10],["Electrum",0.027126],["Diopside",0.0005425],["Bismuth",0.000001628],["Astral Spore",4.34e-10],["Eternium",2.713e-10],["Silver",0.27126300000000003],["Smoky Quartz",0.043402],["Malachite",0.005425],["Onyx",0.001085],["Osmium",0.000027130000000000003],["Lightshard",0.000005425],["Radiant Gold",1.085e-8],["Mercury",0.00001085],["Star Garnet",1.356e-8],["Red Beryl",8.138e-9],["Topaz",0.108505],["Starshine",5.425e-7]],"Astral Caverns":[["Gold",0.519968],["Jade",0.00104],["Iridium",0.000041599999999999995],["Aurorite",0.000020799999999999997],["Aquamarine",0.0000025999999999999997],["Electrum",0.025998],["Depleted Shard",1.04e-7],["Celestium",5.2e-11],["Aetherium",5.2e-9],["Silver",0.259984],["Sapphire",0.041597],["Lapis Lazuli",0.0052],["Meteoric Iron",0.041597],["Moonstone",0.000026],["Opal",0.00052],["Palladium",5.2e-7],["Red Beryl",9.359e-9],["Nickel",0.103994],["Meteoric Gold",0.000010399999999999999],["Vortessence",1.56e-8],["Sunstone",5.2e-9]],"Rubble Creek Deposits":[["Gold",0.521295],["Iridium",0.0001564],["Emerald",0.000041700000000000004],["Aurorite",0.00007819],["Diamond",0.000002085],["Catseye",0.000001043],["Aetherite",7.819e-7],["Pyrite",0.156389],["Platinum",0.260648],["Sapphire",0.005213],["Ruby",0.002085],["Lapis Lazuli",0.001303],["Meteoric Iron",0.0006256],["Pink Diamond",2.085e-7],["Osmium",0.00001043],["Opal",0.00001564],["Rose Gold",0.000005213000000000001],["Titanium",0.041704],["Topaz",0.010426]],"Lifespring Oasis":[["Gold",0.516447],["Inferlume",1.653e-8],["Catseye",5.164e-7],["Electrum",0.025821999999999998],["Depleted Shard",1.0329999999999999e-7],["Aetherium",5.681e-9],["Agate",4.648e-9],["Platinum",0.129112],["Obsidian",0.258224],["Ruby",0.010329],["Peridot",0.005163999999999999],["Onyx",0.001033],["Mercury",0.000036150000000000005],["Meteoric Gold",0.000010330000000000001],["Sandsteel",0.001549],["Selenite",0.0006196999999999999],["Jasper",0.000005164],["Key of Life",1.549e-11],["Topaz",0.051645],["Starshine",0.000002582]],"Mystic Floodplains":[["Gold",0.516446],["Inferlume",1.653e-8],["Catseye",5.164e-7],["Electrum",0.025821999999999998],["Aetherium",5.681e-9],["Agate",4.648e-9],["Eye of the Sands",3.615e-11],["Platinum",0.129112],["Obsidian",0.258223],["Ruby",0.010329],["Peridot",0.005163999999999999],["Onyx",0.001033],["Mercury",0.000036150000000000005],["Radium",0.000002066],["Meteoric Gold",0.000010330000000000001],["Sandsteel",0.001549],["Selenite",0.0006196999999999999],["Jasper",0.000005164],["Topaz",0.051645],["Starshine",0.000002582]],"Sandstone Stream":[["Gold",0.517301],["Inferlume",1.655e-8],["Fire Opal",5.173e-7],["Electrum",0.025865],["Aetherium",5.69e-9],["Agate",4.656e-9],["Platinum",0.129325],["Obsidian",0.258651],["Ruby",0.010346],["Peridot",0.005173],["Osmium",0.0005172999999999999],["Mercury",0.00003621],["Radium",0.000002069],["Meteoric Gold",0.00001035],["Sandsteel",0.001035],["Jasper",0.000005173],["Solarium",8.277e-11],["Topaz",0.05173],["Starshine",0.000002587]],"North Pole":[["Gold",0.279264],["Blue Ice",0.279264],["Jade",0.013963000000000001],["Glacial Quartz",0.002234],["Frostshard",2.234e-8],["Iridium",0.0001396],["Borealite",0.00004468],["Aurorite",0.00001676],["Cobalt",0.00002234],["Diamond",0.000004468],["Aetherite",0.000002234],["Aquamarine",0.000002234],["Candy Cane",0.0005585],["Silver",0.279264],["Sapphire",0.033512],["Pink Diamond",1.117e-7],["Peppermint Prism",0.000001117],["North Star",2.793e-9],["Titanium",0.111706]],"Frozen Peak":[["Blue Ice",0.51501],["Cryonic Artifact",6.4379999999999995e-9],["Jade",0.012875000000000001],["Glacial Quartz",0.001288],["Frostshard",1.609e-8],["Iridium",0.00012880000000000001],["Borealite",0.0000515],["Aurorite",0.00001931],["Cobalt",0.00002575],["Diamond",0.000005150000000000001],["Aetherite",0.0000025750000000000003],["Aquamarine",0.0000012879999999999998],["Silver",0.321882],["Sapphire",0.019313],["Lapis Lazuli",0.0006438],["Mythril",3.219e-8],["Titanium",0.128753],["Tourmaline",0.0000016090000000000002]],"Frostbite River":[["Blue Ice",0.51501],["Jade",0.012875000000000001],["Glacial Quartz",0.001288],["Iridium",0.00012880000000000001],["Emerald",0.00001931],["Borealite",0.0000515],["Cobalt",0.00002575],["Diamond",0.000005150000000000001],["Aquamarine",0.0000012879999999999998],["Silver",0.321882],["Sapphire",0.019313],["Lapis Lazuli",0.0006438],["Mythril",2.575e-8],["Palladium",0.0000025750000000000003],["Titanium",0.128753],["Vortessence",8.369e-8],["Tourmaline",0.0000016090000000000002]],"Frostbite Waterfall":[["Blue Ice",0.51501],["Jade",0.012875000000000001],["Glacial Quartz",0.001288],["Frostshard",1.609e-8],["Iridium",0.00012880000000000001],["Borealite",0.0000515],["Aurorite",0.00001931],["Cobalt",0.00002575],["Diamond",0.000005150000000000001],["Aetherite",0.0000025750000000000003],["Aquamarine",0.0000012879999999999998],["Silver",0.321881],["Sapphire",0.019313],["Lapis Lazuli",0.0006438],["Mythril",2.575e-8],["Titanium",0.128753],["Vortessence",8.369e-8],["Tourmaline",0.0000016090000000000002]],"Windswept Beach":[["Coral",0.060233999999999996],["Inferlume",9.035000000000001e-8],["Ammonite Fossil",0.00006023],["Fire Opal",0.000003012],["Dragon Bone",0.000004819],["Catseye",0.000003012],["Seashell",0.48187199999999997],["Obsidian",0.24093599999999998],["Pearl",0.180702],["Malachite",0.012047],["Silver Clamshell",0.001807],["Peridot",0.0006023],["Onyx",0.001205],["Meteoric Iron",0.002409],["Osmium",0.00001807],["Opal",0.00001807],["Rose Gold",0.000009035],["Topaz",0.01807],["Vortessence",9.035000000000001e-8]],"Sunset Beach":[["Coral",0.056664000000000006],["Inferlume",8.5e-8],["Ashvein",0.0001133],["Golden Pearl",0.00022669999999999998],["Diamond",0.000005666],["Aetherite",0.000001133],["Silver",0.283321],["Seashell",0.453314],["Pearl",0.169993],["Neodymium",0.022666],["Smoky Quartz",0.011333],["Silver Clamshell",0.0017000000000000001],["Onyx",0.0005666],["Painite",2.267e-7],["Moonstone",0.00005666],["Opal",0.000022669999999999998],["Luminum",0.000017]],"Seashell Beach":[["Coral",0.056661],["Inferlume",8.499e-8],["Ammonite Fossil",0.00005666],["Ashvein",0.0001133],["Golden Pearl",0.0002266],["Aetherite",0.000001133],["Forgotten Totem",2.833e-9],["Silver",0.28330500000000003],["Seashell",0.453288],["Pearl",0.169983],["Neodymium",0.022664],["Smoky Quartz",0.011332],["Silver Clamshell",0.0017000000000000001],["Onyx",0.0005666],["Painite",2.266e-7],["Moonstone",0.00005666],["Opal",0.000022659999999999996],["Luminum",0.000017],["Red Beryl",8.499e-9],["Nautilus Shell",0.000005666]],"Overgrown Grotto (inside Firefly Zones)":[["Firefly Stone",2.334e-7]],"Deeproot Spring (inside Firefly Zones)":[["Firefly Stone",2.2589999999999998e-7]],"Enchanted Ruins (outside Firefly Zones)":[["Firefly Stone",5.837e-8]],"Overgrown Grotto (outside Firefly Zones)":[["Firefly Stone",4.668e-8]],"Deeproot Spring (outside Firefly Zones)":[["Firefly Stone",4.518e-8]],"The Void":[["Voidstone",7.245e-9]]}]==]
+local DROPS=HttpService:JSONDecode(DREDGE_ODDS)
+local ALL_ZONES,POOL,SHARES={},{},{}
+S.dredge=false;S.dredgePurifying=false;S.dredgeRisk=false;S.dredgeMastered=false
+S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAppliedCap="UNSET"
+local dredgeButton,dredgeStatus,show,stop
+local function dredgeText(str)
+    if dredgeStatus then dredgeStatus.Text=str end
+    if S.dredgeLastText~=str then S.dredgeLastText=str;print("[GALAXIS DREDGE] "..str) end
+end
+local function baseDrop(s)
+    return (s:gsub("%s*%(inside Firefly Zones%)","")
+        :gsub("%s*%(outside Firefly Zones%)","")
+        :gsub("%s*%(when in the loot pool%)",""))
+end
+local function poolFor(z)
+    if POOL[z] then return POOL[z] end
+    local own=DROPS[z] or {};local base=baseDrop(z)
+    local out={}
+    if base~=z and DROPS[base] then
+        local replace={}
+        for _,x in ipairs(own) do replace[x[1]]=true end
+        for _,x in ipairs(DROPS[base]) do if not replace[x[1]] then out[#out+1]=x end end
+        for _,x in ipairs(own) do out[#out+1]=x end
+    elseif #own<2 then
+        local seen={}
+        for other,xs in pairs(DROPS) do
+            if other~=z and baseDrop(other)==z then
+                for _,x in ipairs(xs) do
+                    if not seen[x[1]] then seen[x[1]]=true;out[#out+1]=x end
+                end
+                for _,x in ipairs(own) do
+                    if not seen[x[1]] then seen[x[1]]=true;out[#out+1]=x end
+                end
+            end
+        end
+    else
+        for _,x in ipairs(own) do out[#out+1]=x end
+    end
+    if #out<2 then out={} end
+    table.sort(out,function(a,b) return a[2]<b[2] end)
+    POOL[z]=out
+    return out
+end
+for z,rows in pairs(DROPS) do
+    if #poolFor(z)>0 and (#rows>1 or baseDrop(z)~=z) then
+        ALL_ZONES[#ALL_ZONES+1]=z
+    end
+end
+table.sort(ALL_ZONES)
+local function rareBand(n)
+    local l=math.log(math.max(n,1))/math.log(10)
+    return 1+.858*math.min(math.clamp((l-7.26)/.5,0,1),math.clamp((9.67-l)/.5,0,1))
+end
+local function oddsFor(z,L)
+    L=math.max(1,L)
+    local key=z.."|"..string.format("%.12g",L)
+    if SHARES[key] then return SHARES[key] end
+    local rows=poolFor(z)
+    local total=0
+    for _,x in ipairs(rows) do total+=x[2] end
+    local ties,c={},0
+    for _,x in ipairs(rows) do
+        local p=x[2];local t=ties[p]
+        if t then t[2]+=p;t[3]+=1 else ties[p]={c,c+p,1} end
+        c+=p
+    end
+    local results={}
+    if total>0 then
+        local function f(a,b,l) return (1-a)^l-(1-b)^l end
+        for _,x in ipairs(rows) do
+            local p=x[2];local t=ties[p]
+            local lo,hi=t[1]/total,t[2]/total
+            results[x[1]]=(.2891*f(lo,hi,1)
+                +.0280*f(lo,hi,math.max(1,.04317*L))
+                +.1905*f(lo,hi,math.max(1,.40579*L))
+                +.4924*f(lo,hi,math.max(1,1.74153*L)))
+                /t[3]*rareBand(total/p)
+        end
+    end
+    SHARES[key]=results
+    return results
+end
+local function openNow(z)
+    local t=os.date("*t")
+    local min=t.min+t.sec/60
+    if z=="Timelocked Sanctuary" then return min>=46 or min<14 end
+    if z=="Infernal Heart" then return min>=16 and min<44 end
+    return true
+end
+local function totemNear(pos)
+    local checked=0
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        local n=obj.Name:lower()
+        if n:find("totem",1,true)
+            and (n:find("lumin",1,true) or n:find("light",1,true)) then
+            checked+=1
+            if checked>100 then break end
+            local cf=getWaypointCF(obj)
+            if cf and (cf.Position-pos).Magnitude<65
+                and (obj:GetAttribute("Active")==true or obj:GetAttribute("Enabled")==true) then
+                return true
+            end
+        end
+    end
+    return false
+end
+local function eligible(z,tier)
+    if z:find("inside Firefly Zones",1,true) then return false end
+    local base=baseDrop(z)
+    local preset=S.presets[base]
+    if not zoneIndex[base] or not preset or not unpackCF(preset.dig)
+        or not unpackCF(preset.water) or not waypointIndex[preset.waypoint or ""] then return false end
+    if base=="The Void" or base=="Haunted Creek" or base=="North Pole"
+        or base=="Seashell Beach" or base:find("Tomb Vein",1,true) then return false end
+    if base=="Magma Furnace" then return false end -- Cannot verify fire protection
+    if base=="Fungal Marsh" then return tier>=2 and S.dredgePurifying end
+    if base=="Rotwood Swamp" then return tier>=3 and S.dredgeRisk end
+    if base=="Timelocked Sanctuary" or base=="Infernal Heart" then return tier>=4 and openNow(base) end
+    if base=="Abyssal Depth" then
+        return tier>=5 and S.dredgeRisk and totemNear(unpackCF(preset.dig).Position)
+    end
+    return true
+end
+local function groupBest(group,places,L,per)
+    local best
+    for _,z in ipairs(places) do
+        local has={}
+        for _,row in ipairs(poolFor(z)) do has[row[1]]=true end
+        local matches=true
+        for _,q in ipairs(group) do if not has[q.m] then matches=false;break end end
+        if matches then
+            for c=0,#CAPS do
+                local cap=c==0 and nil or CAPS[c]
+                if cap==nil or cap<L then
+                    local shares=oddsFor(z,cap and cap*.63 or L)
+                    local worst=0
+                    for _,q in ipairs(group) do
+                        local p=shares[q.m] or 0
+                        worst=p>0 and math.max(worst,q.n/(p*per)) or math.huge
+                    end
+                    if not best or worst<best.pans*(1-1e-9)
+                        or (math.abs(worst-best.pans)<=best.pans*1e-9
+                        and cap==nil and best.cap~=nil) then
+                        best={z=z,cap=cap,pans=worst,group=group}
+                    end
+                end
+            end
+        end
+    end
+    return best
+end
+local function partitions(wants)
+    local out,sets={},{}
+    local function rec(i)
+        if i>#wants then
+            local clone={}
+            for _,group in ipairs(sets) do
+                local arr={}
+                for _,v in ipairs(group) do arr[#arr+1]=v end
+                clone[#clone+1]=arr
+            end
+            out[#out+1]=clone;return
+        end
+        for _,g in ipairs(sets) do
+            g[#g+1]=wants[i];rec(i+1);table.remove(g)
+        end
+        sets[#sets+1]={wants[i]};rec(i+1);table.remove(sets)
+    end
+    rec(1)
+    return out
+end
+local function optimize(wants,places,L,cap)
+    local per=math.max(1,.6779*math.max(1,cap)^.56474)
+    local options={}
+    for _,groups in ipairs(partitions(wants)) do
+        local stops,total,valid=true,0,true
+        stops={}
+        for _,group in ipairs(groups) do
+            local v=groupBest(group,places,L,per)
+            if not v then valid=false;break end
+            stops[#stops+1]=v;total+=v.pans
+        end
+        if valid then options[#options+1]={stops=stops,total=total} end
+    end
+    if #options==0 then return nil end
+    local cheapest=math.huge
+    for _,v in ipairs(options) do
+        v.cost=v.total+2*(#v.stops-1)
+        cheapest=math.min(cheapest,v.cost)
+    end
+    table.sort(options,function(a,b)
+        local aa,bb=a.cost<=cheapest*1.15,b.cost<=cheapest*1.15
+        if aa~=bb then return aa end
+        if aa and bb and #a.stops~=#b.stops then return #a.stops<#b.stops end
+        return a.cost<b.cost
+    end)
+    return options[1]
+end
+local function bestRoute(wants,L,cap)
+    local fallback
+    for tier=1,5 do
+        local places,reachable={},{}
+        for _,z in ipairs(ALL_ZONES) do
+            if eligible(z,tier) then
+                places[#places+1]=z
+                for _,x in ipairs(poolFor(z)) do reachable[x[1]]=true end
+            end
+        end
+        local can={}
+        for _,w in ipairs(wants) do if reachable[w.m] then can[#can+1]=w end end
+        if #can>0 then
+            local plan=optimize(can,places,L,cap)
+            if plan then
+                plan.covered=#can;plan.needed=#wants
+                if #can==#wants then return plan end
+                if not fallback or plan.covered>fallback.covered then fallback=plan end
+            end
+        end
+    end
+    return fallback
+end
+local function getQuest()
+    if type(getsenv)~="function" then return nil end
+    local gui=P:FindFirstChild("PlayerGui")
+    local main=gui and gui:FindFirstChild("MainUI")
+    if not main then return nil end
+    local candidates={}
+    local view=main:FindFirstChild("QuestView")
+    local questScript=view and view:FindFirstChild("QuestUILocal",true)
+    if questScript then candidates[#candidates+1]=questScript end
+    local questPanel=main:FindFirstChild("Quests")
+    local disp=questPanel and questPanel:FindFirstChild("QuestDisplayLocal",true)
+    if disp then candidates[#candidates+1]=disp end
+    for _,obj in ipairs(candidates) do
+        local ok,env=pcall(getsenv,obj)
+        if ok and type(env)=="table" then
+            local function from(rootTable)
+                if type(rootTable)~="table" then return nil end
+                local a=rootTable.currentQuestData
+                local b=rootTable.localQuestData
+                if type(a)=="table" and type(a.DredgeMaster)=="table" then return a.DredgeMaster end
+                if type(b)=="table" and type(b.DredgeMaster)=="table" then return b.DredgeMaster end
+            end
+            local quest=from(env._G) or from(env)
+            if quest then return quest end
+        end
+    end
+    return nil
+end
+local function remaining(state)
+    if type(state)~="table" or type(state.StepProgress)~="table" then return nil,"Progress not available" end
+    local merged,found,done={},false,true
+    for _,p in ipairs(state.StepProgress) do
+        if type(p)=="table" and tonumber(p.Amount) then
+            local left=math.max(0,math.ceil(tonumber(p.Amount)-(tonumber(p.Progress) or 0)-1e-7))
+            if left>0 then done=false end
+            if type(p.Collect)=="string" and p.Collect~="" then
+                found=true;merged[p.Collect]=(merged[p.Collect] or 0)+left
+            elseif left>0 then return nil,"Non-mineral objective" end
+        end
+    end
+    if not found then return nil,"No collection objectives" end
+    local list={}
+    for name,n in pairs(merged) do if n>0 then list[#list+1]={m=name,n=n} end end
+    table.sort(list,function(a,b) return a.m<b.m end)
+    return list,done
+end
+local function questsRemote()
+    local f=RS:FindFirstChild("Remotes")
+    return f and f:FindFirstChild("Quests")
+end
+local function startQuest(id)
+    local container=RS:FindFirstChild("Quests")
+    local obj=container and container:FindFirstChild("DredgeMaster")
+    local r=questsRemote()
+    local f=r and r:FindFirstChild("StartQuest")
+    if not obj or not f or not f:IsA("RemoteFunction") then return false end
+    return invoke(f,id,obj,nil,"DredgeMaster")
+end
+local function goWaypoint(wp,id)
+    local folder=waypointFolder()
+    local r=root()
+    local to=folder and folder:FindFirstChild(wp or "")
+    if not r or not to then return false end
+    local from=closestWaypoint(folder,r.Position)
+    if from and from~=to then
+        local remote=RS:FindFirstChild("Remotes")
+        local misc=remote and remote:FindFirstChild("Misc")
+        local travel=misc and misc:FindFirstChild("FastTravel")
+        if not travel or not travel:IsA("RemoteEvent") then return false end
+        if not pcall(function() travel:FireServer(from,to) end) then return false end
+        if not pause(.5,id) then return false end
+    end
+    return true
+end
+local function safeDig()
+    local x=S.presets["Fortune River"]
+    return x and unpackCF(x.dig)
+end
+local function escapeZone()
+    local r=root();local target=safeDig()
+    if r and target and (r.Position-target.Position).Magnitude>25 then
+        pcall(function() r.CFrame=target end)
+    end
+end
+local function dredgeHealthWatch()
+    if not S.dredge or not S.running or not S.dredgeRiskZone then return end
+    local c=P.Character
+    local h=c and c:FindFirstChildOfClass("Humanoid")
+    if h and h.Health<h.MaxHealth*.75 then
+        escapeZone()
+        if stop then stop() end
+        dredgeText("STOPPED: Rotwood damage! Retreated (75% HP)")
+    end
+end
+local function dredgeCycle(id)
+    if not valid(id) or not S.dredge then return false end
+    dredgeHealthWatch()
+    if not valid(id) or not S.dredge then return false end
+    local state=getQuest()
+    if not state then
+        if not S.dredgeStartAt then S.dredgeStartAt=os.clock();startQuest(id) end
+        dredgeText("Waiting for quest cache / starting quest")
+        if os.clock()-S.dredgeStartAt>15 then dredgeText("No quest data: won't farm blindly") end
+        return false
+    end
+    S.dredgeStartAt=nil
+    local wants,done=remaining(state)
+    if not wants then dredgeText(tostring(done));return false end
+    if done then
+        if not S.dredgeTalkAt then
+            S.dredgeTalkAt=os.clock();S.dredgeCurrent=nil;S.dredgeGroup=nil;S.dredgeAt=nil
+            escapeZone()
+            if goWaypoint("Dredge Master",id) then
+                local remote=questsRemote()
+                local talk=remote and remote:FindFirstChild("QuestTalked")
+                if talk and talk:IsA("RemoteEvent") then
+                    pcall(function() talk:FireServer("DredgeMaster") end)
+                    dredgeText("Finished Dredge: talked to NPC")
+                end
+            else dredgeText("Could not travel to Dredge Master") end
+        elseif not S.dredgeNextAt and os.clock()-S.dredgeTalkAt>3 then
+            S.dredgeNextAt=os.clock();startQuest(id)
+            dredgeText("Requested next quest, verifying progress")
+        elseif S.dredgeNextAt and os.clock()-S.dredgeNextAt>12 then
+            escapeZone()
+            if stop then stop() end
+            dredgeText("Quest transition unverified: stopped retries")
+        end
+        return false
+    end
+    S.dredgeTalkAt=nil;S.dredgeNextAt=nil
+    local st=P:FindFirstChild("Stats")
+    local raw=st and tonumber(st:GetAttribute("Luck"))
+    local capacityNow=capacity()
+    if not raw or raw<=0 or not capacityNow or capacityNow<=0 then
+        dredgeText("Stats.Luck/Capacity unavailable");return false
+    end
+    local L=math.max(1,raw*(S.dredgeMastered and 1 or 2/3))
+    local need={}
+    for _,w in ipairs(wants) do need[w.m]=w.n end
+    local keep=false
+    if S.dredgeCurrent and S.dredgeGroup and openNow(baseDrop(S.dredgeCurrent))
+        and eligible(S.dredgeCurrent,5) then
+        for _,g in ipairs(S.dredgeGroup) do
+            if (need[g.m] or 0)>0 then keep=true;break end
+        end
+    end
+    if not keep then
+        local plan=bestRoute(wants,L,capacityNow)
+        if not plan or not plan.stops[1] then
+            escapeZone()
+            dredgeText("Waiting: missing safe zones / ring / timed opening")
+            return false
+        end
+        local choice=plan.stops[1]
+        S.dredgeCurrent=choice.z;S.dredgeGroup=choice.group
+        S.dredgeTargetCap=choice.cap
+        S.dredgePlanText=string.format("%d/%d goals, ~%.0f pans",
+            plan.covered,plan.needed,plan.total)
+    end
+    local targetZone=baseDrop(S.dredgeCurrent)
+    local p=S.presets[targetZone]
+    if not p or not openNow(targetZone) then
+        S.dredgeCurrent=nil;S.dredgeGroup=nil
+        escapeZone()
+        dredgeText("Timed zone closed; parked in Fortune River")
+        return false
+    end
+    if S.dredgeAt~=targetZone then
+        dredgeText("Travel: "..targetZone.." via "..tostring(p.waypoint))
+        if not goWaypoint(p.waypoint,id) then dredgeText("Warp request failed");return false end
+        S.dig=unpackCF(p.dig);S.water=unpackCF(p.water)
+        if not S.dig or not S.water or not move(S.dig,id) then
+            dredgeText("Zone destination teleport rejected");return false
+        end
+        S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
+        S.activeZone=targetZone
+    end
+    if S.dredgeAppliedCap~=S.dredgeTargetCap then
+        local rs=RS:FindFirstChild("Remotes")
+        local settings=rs and rs:FindFirstChild("Settings")
+        local remote=settings and settings:FindFirstChild("ChangeSetting")
+        if not remote or not remote:IsA("RemoteEvent") then
+            dredgeText("ChangeSetting unavailable");return false
+        end
+        local capText="None"
+        if S.dredgeTargetCap~=nil then
+            capText=tostring(S.dredgeTargetCap):reverse():gsub("(%d%d%d)","%1,"):reverse():gsub("^,","")
+        end
+        if not pcall(function() remote:FireServer("MaximumLuck",capText) end) then return false end
+        S.dredgeAppliedCap=S.dredgeTargetCap
+        if not pause(.2,id) then return false end
+    end
+    dredgeText(targetZone.." | cap "..tostring(S.dredgeTargetCap or "NONE")
+        .." | "..tostring(S.dredgePlanText))
+    return true
+end
+
 -- Persistent tab-separated logger
 local function cell(v)
     local s=tostring(v==nil and "" or v)
@@ -462,8 +886,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,610),
-    Position=UDim2.new(.5,-170,.5,-305),
+    Size=UDim2.fromOffset(340,758),
+    Position=UDim2.new(.5,-170,.5,-379),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -525,6 +949,12 @@ local importLegacy=button("IMPORT OLD WP",177,423,149,36,Body)
 local presetStatus=label("",14,466,312,21,11,MUTED)
 label("SET DIG / WATER saves to MINING ZONE",14,491,312,19,10,MUTED)
 local exportPresetButton=button("EXPORT PRESETS TO TXT + CLIPBOARD",14,519,312,35,Body)
+dredgeButton=button("AUTO DREDGE: OFF",14,563,312,35,Body)
+local ringButton=button("PURIFYING RING: NO",14,606,149,32,Body)
+local riskButton=button("RISKY ZONES: OFF",177,606,149,32,Body)
+local masteredButton=button("AUTOPAN LUCK: 2/3",14,647,312,32,Body)
+dredgeStatus=label("Dredge idle",14,684,312,22,11,MUTED)
+dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
 local function selectedZone() return ZONE_NAMES[S.selectedZone] end
 local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local function refreshPreset()
@@ -539,7 +969,7 @@ local function refreshPreset()
     -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
 refreshPreset()
-local function show(t) if S.alive then status.Text=t end end
+show=function(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
     return string.format("%.1f, %.1f, %.1f",p.X,p.Y,p.Z)
@@ -554,8 +984,17 @@ task.spawn(function()
     end
 end)
 
-local function stop()
+stop=function()
     if not S.alive then return end
+    local hadDredge=S.dredge
+    S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
+    S.dredgeAt=nil;S.dredgeRiskZone=false;S.dredgeAppliedCap="UNSET"
+    if hadDredge and S.dredgeRestore then
+        S.dig=S.dredgeRestore.dig;S.water=S.dredgeRestore.water
+        S.activeZone=S.dredgeRestore.zone
+        S.dredgeRestore=nil
+    end
+    if dredgeButton then dredgeButton.Text="AUTO DREDGE: OFF" end
     -- This invalidates all current farm cycles and pending recovery retries.
     S.running=false;S.token+=1;S.waiting=false
     S.sellQueue={}
@@ -623,6 +1062,11 @@ local function autoSell(id,cycle)
 end
 local function farming(id,r,target)
     while valid(id) do
+        if S.dredge and not dredgeCycle(id) then
+            if not valid(id) then return end
+            if not pause(1.5,id) then return end
+            continue
+        end
         -- Refresh capacity each cycle, including equipment/buff changes.
         local newCapacity=capacity()
         if newCapacity and newCapacity>0 then target=newCapacity end
@@ -916,6 +1360,24 @@ bind(exportPresetButton.MouseButton1Click,function()
     end
 end)
 
+bind(ringButton.MouseButton1Click,function()
+    S.dredgePurifying=not S.dredgePurifying
+    ringButton.Text="PURIFYING RING: "..(S.dredgePurifying and "YES" or "NO")
+    S.dredgeGroup=nil
+    dredgeText(S.dredgePurifying and "Ring confirmation ON (must be equipped)" or "Fungal Marsh excluded")
+end)
+bind(riskButton.MouseButton1Click,function()
+    S.dredgeRisk=not S.dredgeRisk
+    riskButton.Text="RISKY ZONES: "..(S.dredgeRisk and "ON" or "OFF")
+    S.dredgeGroup=nil
+    dredgeText(S.dredgeRisk and "Rotwood allowed with HP retreat; risk remains" or "Rotwood and Abyssal excluded")
+end)
+bind(masteredButton.MouseButton1Click,function()
+    S.dredgeMastered=not S.dredgeMastered
+    masteredButton.Text="AUTOPAN LUCK: "..(S.dredgeMastered and "FULL (MASTERED)" or "2/3")
+    S.dredgeGroup=nil
+    dredgeText(S.dredgeMastered and "Model: full luck" or "Model: two-thirds luck")
+end)
 bind(sellB.MouseButton1Click,function()
     if not S.sell and not getSell() then show("SellAll unavailable");return end
     S.sell=not S.sell
@@ -923,12 +1385,20 @@ bind(sellB.MouseButton1Click,function()
 end)
 -- ON is a persistent user request. A transient farm failure does not turn
 -- the toggle off: we re-resolve the equipped pan and retry quickly.
-bind(farmB.MouseButton1Click,function()
-    if S.running then
-        stop()
-        return
+local function startWorker(asDredge)
+    if S.running then return end
+    if not asDredge and (not S.dig or not S.water) then show("Save both positions");return end
+    if asDredge then
+        if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
+        S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
+        S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
+        S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.dredgeTalkAt=nil;S.dredgeNextAt=nil;S.dredgeStartAt=nil
+        dredgeButton.Text="AUTO DREDGE: ON"
+        dredgeText("Starting / reading Dredge quest")
+    else
+        S.dredge=false
     end
-    if not S.dig or not S.water then show("Save both positions");return end
     S.running=true
     S.token+=1
     local id=S.token
@@ -975,13 +1445,26 @@ bind(farmB.MouseButton1Click,function()
             end
         end
     end)
+end
+bind(farmB.MouseButton1Click,function()
+    if S.running then stop() else startWorker(false) end
+end)
+bind(dredgeButton.MouseButton1Click,function()
+    if S.running then stop();dredgeText("Dredge stopped")
+    else startWorker(true) end
+end)
+task.spawn(function()
+    while S.alive do
+        if S.dredge and S.dredgeRiskZone then dredgeHealthWatch() end
+        task.wait(.15)
+    end
 end)
 bind(X.MouseButton1Click,close)
 local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,610)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,758)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
