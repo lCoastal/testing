@@ -564,6 +564,21 @@ local function questsRemote()
     local f=RS:FindFirstChild("Remotes")
     return f and f:FindFirstChild("Quests")
 end
+-- Read a server step ONLY as a fallback, not once per pan or per mineral.
+local function serverQuestStep(id)
+    if os.clock()-(S.dredgeLastStepQuery or -math.huge)<5 then return nil end
+    S.dredgeLastStepQuery=os.clock()
+    local qr=questsRemote()
+    local remote=qr and qr:FindFirstChild("GetCurrentQuestStep")
+    if not remote or not remote:IsA("RemoteFunction") then return nil end
+    local ok,result=invoke(remote,id,"DredgeMaster")
+    if not ok then return nil end
+    if type(result)=="number" then return result end
+    if type(result)=="table" then
+        return tonumber(result.Step or result.CurrentStep or result.StepNumber)
+    end
+    return tonumber(result)
+end
 local function startQuest(id)
     local container=RS:FindFirstChild("Quests")
     local obj=container and container:FindFirstChild("DredgeMaster")
@@ -660,6 +675,9 @@ local function dredgeCycle(id)
     end
     S.dredgeStartAt=nil
     local wants,done=remaining(state)
+    if not wants and done=="No collect entries; checking server step" then
+        if serverQuestStep(id)==2 then wants={};done=true end
+    end
     if not wants then dredgeText(tostring(done));return false end
     if done then
         if not S.dredgeTalkAt then
@@ -780,6 +798,7 @@ local function dredgeCycle(id)
         end
         S.dredgeTravelRetryAt=nil
         S.dredgeAt=targetZone;S.dredgeRiskZone=(targetZone=="Rotwood Swamp")
+        S.dredgeCapLastAt=-math.huge -- a new zone needs its optimal cap immediately
         S.activeZone=targetZone
     end
     local capKey=S.dredgeTargetCap and tostring(S.dredgeTargetCap) or "NONE"
@@ -1509,6 +1528,8 @@ local function startWorker(asDredge)
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.dredgeCapLastAt=-math.huge
+        S.dredgeLastStepQuery=-math.huge
         S.dredgeUncappedLuck=nil
         S.dredgeWarped={};S.dredgeTravelFailed={};S.dredgeTravelRetryAt=nil
         S.dredgePlanLuck=nil;S.dredgePlanCapacity=nil
