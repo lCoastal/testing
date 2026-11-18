@@ -432,8 +432,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,562),
-    Position=UDim2.new(.5,-170,.5,-281),
+    Size=UDim2.fromOffset(340,610),
+    Position=UDim2.new(.5,-170,.5,-305),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -494,6 +494,7 @@ local travelWaypoint=button("FAST TRAVEL",14,423,149,36,Body)
 local importLegacy=button("IMPORT OLD WP",177,423,149,36,Body)
 local presetStatus=label("",14,466,312,21,11,MUTED)
 label("SET DIG / WATER saves to MINING ZONE",14,491,312,19,10,MUTED)
+local exportPresetButton=button("EXPORT PRESETS TO TXT + CLIPBOARD",14,519,312,35,Body)
 local function selectedZone() return ZONE_NAMES[S.selectedZone] end
 local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local function refreshPreset()
@@ -817,6 +818,67 @@ bind(travelWaypoint.MouseButton1Click,function()
         or ("FastTravel failed: "..tostring(err):sub(1,65)))
 end)
 
+
+-- Export all zone mappings and full-precision coordinates as a shareable text report.
+-- Includes all 21 in-game waypoint pivots for reference, but the warp remote uses Instances.
+-- Export is ONLY triggered by clicking the button (never on every mineral).
+local function exportCFrame(cf)
+    if typeof(cf)~="CFrame" then return "" end
+    local parts={cf:GetComponents()}
+    local out={}
+    for i=1,#parts do out[i]=string.format("%.17g",parts[i]) end
+    return table.concat(out,",")
+end
+local function exportZoneCFrame(serialized)
+    return exportCFrame(unpackCF(serialized))
+end
+bind(exportPresetButton.MouseButton1Click,function()
+    local lines={
+        "GALAXIS HUB ZONE PRESETS | VERSION 2",
+        "Export: "..os.date("%Y-%m-%d %H:%M:%S"),
+        "Note: Each CFrame is 12 comma-separated numbers (position + rotation).",
+        "An empty field means not configured. This is NOT a complete farming preset until both positions are saved.",
+        "",
+        "=== MINING ZONES (35) ===",
+        "Zone\\tMapped Waypoint\\tDig CFrame\\tWater CFrame"
+    }
+    local mapped,complete=0,0
+    for _,name in ipairs(ZONE_NAMES) do
+        local p=S.presets[name] or {}
+        local wp=p.waypoint or ""
+        local dig,water=exportZoneCFrame(p.dig),exportZoneCFrame(p.water)
+        if wp~="" then mapped+=1 end
+        if dig~="" and water~="" then complete+=1 end
+        lines[#lines+1]=table.concat({name,wp,dig,water},"\t")
+    end
+    lines[#lines+1]=""
+    lines[#lines+1]="=== FAST TRAVEL WAYPOINTS (21) ==="
+    lines[#lines+1]="Waypoint\\tWorld CFrame"
+    local folder=waypointFolder()
+    for _,name in ipairs(WAYPOINT_NAMES) do
+        local obj=folder and folder:FindFirstChild(name)
+        local cf=obj and getWaypointCF(obj)
+        lines[#lines+1]=name.."\t"..exportCFrame(cf)
+    end
+    lines[#lines+1]=""
+    lines[#lines+1]=string.format("Summary: %d/35 mapped zones; %d/35 with dig+water positions.",
+        mapped,complete)
+    local contents=table.concat(lines,"\n")
+    local saveOk=false
+    if type(writefile)=="function" then
+        saveOk=pcall(writefile,"GalaxisHub_PresetExport.txt",contents)
+    end
+    local copyOk=false
+    if type(setclipboard)=="function" then
+        copyOk=pcall(setclipboard,contents)
+    end
+    show(string.format("Exported %d mapped / %d complete; TXT: %s, copied: %s",
+        mapped,complete,saveOk and "yes" or "no",copyOk and "yes" or "no"))
+    if not saveOk then
+        print("[GALAXIS HUB] Preset export (file API unavailable):\n"..contents)
+    end
+end)
+
 bind(sellB.MouseButton1Click,function()
     if not S.sell and not getSell() then show("SellAll unavailable");return end
     S.sell=not S.sell
@@ -882,7 +944,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,562)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,610)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
