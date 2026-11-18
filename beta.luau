@@ -12,11 +12,29 @@ if E.CoastalSafeFarm and E.CoastalSafeFarm.Close then
 end
 if E.StopUniversalLogger then pcall(E.StopUniversalLogger) end
 
-local FILE="Prospecting_Universal_Logger_Zone.txt"
+-- New timestamped .txt file on EVERY launch; never overwrite previous runs.
+local BASE="Prospecting_Universal_Logger_Zone_"..os.date("%Y-%m-%d_%H-%M-%S")
+local FILE=BASE..".txt"
+local function fileExists(path)
+    if type(isfile)=="function" then
+        local ok,exists=pcall(isfile,path)
+        if ok then return exists end
+    end
+    if type(readfile)=="function" then
+        return pcall(readfile,path)
+    end
+    return false
+end
+local suffix=1
+while fileExists(FILE) do
+    suffix+=1
+    FILE=BASE.."_"..suffix..".txt"
+end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
-local CFG={dig=.025,shake=.04,shakeGap=.012,teleport=.08,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
+local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,maxDig=600,maxShake=180}
 local S={alive=true,running=false,testing=false,token=0,cycles=0,dig=nil,water=nil,sell=false,selling=false,doubleShake=true,
-    waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil}
+    waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
+    sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
 E.CoastalSafeFarm=S
 
@@ -43,10 +61,11 @@ local function capacity()
     local a=P:FindFirstChild("Stats")
     return a and tonumber(a:GetAttribute("Capacity"))
 end
-local function pause(sec,id)
+local function pause(sec,id,ready)
     local deadline=os.clock()+sec
     while os.clock()<deadline do
         if not valid(id) then return false end
+        if ready and ready() then return true end
         task.wait(.01)
     end
     return valid(id)
@@ -101,10 +120,19 @@ local function search(root,names)
     end
 end
 local function stat(names)
-    local v=search(P:FindFirstChild("Stats"),names)
-    if v~=nil then return v end
+    local stats=P:FindFirstChild("Stats")
+    if stats then
+        for _,name in ipairs(names) do
+            local v=stats:GetAttribute(name)
+            if v~=nil then return v end
+            local child=stats:FindFirstChild(name)
+            if child and child:IsA("ValueBase") then return child.Value end
+        end
+        local v=search(stats,names)
+        if v~=nil then return v end
+    end
     for _,name in ipairs(names) do
-        v=P:GetAttribute(name)
+        local v=P:GetAttribute(name)
         if v~=nil then return v end
     end
     return "UNKNOWN"
@@ -133,7 +161,11 @@ end
 local function flush()
     if L.writing or #L.unsaved==0 then return end
     L.writing=true
-    local chunk=table.concat(L.unsaved)
+    -- Move queued rows aside BEFORE a potentially yielding file operation.
+    -- New batches appended during a write must not be erased afterward.
+    local batch=L.unsaved
+    L.unsaved={}
+    local chunk=table.concat(batch)
     local ok,err=pcall(function()
         if type(appendfile)=="function" then
             appendfile(FILE,chunk)
@@ -144,9 +176,12 @@ local function flush()
         end
     end)
     if ok then
-        L.unsaved={}
         L.error=nil
     else
+        local retry={}
+        for _,line in ipairs(batch) do retry[#retry+1]=line end
+        for _,line in ipairs(L.unsaved) do retry[#retry+1]=line end
+        L.unsaved=retry
         L.error=tostring(err)
         warn("[COASTAL LOGGER] Write failure:",err)
     end
@@ -186,20 +221,8 @@ local function logItem(item)
     }
     L.lastItem=os.clock()
 end
-if type(isfile)=="function" and isfile(FILE) then
-    if type(readfile)=="function" then
-        local ok,data=pcall(readfile,FILE)
-        if ok and type(data)=="string" then
-            if data:sub(1,#HEADER)~=HEADER then
-                L.error="TSV header mismatch. Rename old file before running."
-            else
-                for n in data:gmatch("\n[^\t\r\n]+\t(%d+)\t") do
-                    L.pan=math.max(L.pan,tonumber(n) or 0)
-                end
-            end
-        end
-    end
-elseif type(writefile)=="function" then
+-- Start a new session file now, including the TSV column names.
+if type(writefile)=="function" then
     local ok,err=pcall(writefile,FILE,HEADER)
     if not ok then L.error=tostring(err) end
 else
@@ -335,6 +358,7 @@ end)
 local function stop()
     if not S.alive then return end
     S.running=false;S.token+=1;S.waiting=false
+    S.sellQueue={}
     if S.completion then S.completion:Disconnect();S.completion=nil end
     finishBatch()
     show("Stopped")
@@ -357,19 +381,41 @@ local function getSell()
     local r=shop and shop:FindFirstChild("SellAll")
     return r and r:IsA("RemoteFunction") and r or nil
 end
-local function autoSell(id)
-    if not S.sell or S.selling or not valid(id) then return end
-    local r=getSell()
-    if not r then show("SellAll unavailable");return end
+-- Exactly one SellAll request for each successfully completed pan
+-- while Auto Sell is enabled. Sequential queue prevents dropped pans.
+-- Sales run separately, so digging is never blocked by selling.
+local function autoSell(id,cycle)
+    if not S.sell or not valid(id) or S.lastQueuedCycle==cycle then return end
+    S.lastQueuedCycle=cycle
+    S.sellQueue[#S.sellQueue+1]={id=id,cycle=cycle,queuedAt=os.clock()}
+    if S.selling then return end
     S.selling=true
     task.spawn(function()
-        local deadline=os.clock()+2
-        while valid(id) and S.sell and os.clock()<deadline do
-            if #L.pending==0 and #L.unsaved==0 and S.rewards>0 then break end
-            task.wait(.03)
-        end
-        if valid(id) and S.sell and #L.pending==0 and #L.unsaved==0 then
-            pcall(function() r:InvokeServer() end)
+        while S.alive and #S.sellQueue>0 do
+            local job=table.remove(S.sellQueue,1)
+            if valid(job.id) and S.sell then
+                -- Let rewards replicate and the logger flush before selling.
+                -- Do not wait for newer pans indefinitely.
+                local deadline=os.clock()+2.5
+                while valid(job.id) and S.sell and os.clock()<deadline do
+                    if os.clock()-job.queuedAt>=CFG.logGap
+                        and #L.pending==0 and #L.unsaved==0 and not L.writing then
+                        break
+                    end
+                    task.wait(.025)
+                end
+                if valid(job.id) and S.sell then
+                    local r=getSell()
+                    if r then
+                        local ok=pcall(function() r:InvokeServer() end)
+                        if not ok then show("Auto Sell failed on pan "..job.cycle) end
+                    else
+                        S.sell=false
+                        sellB.Text="AUTO SELL: OFF"
+                        show("SellAll unavailable")
+                    end
+                end
+            end
         end
         S.selling=false
     end)
@@ -402,7 +448,7 @@ local function farming(id,r,target)
             local ok,result=invoke(r.pan,id)
             if not ok then return "Pan call failed" end
             if result==true then accepted=true;break end
-            if not pause(.06,id) then return end
+            if not pause(CFG.panRetry,id) then return end
         end
         if not accepted then return "Pan rejected" end
         show("Shaking")
@@ -416,13 +462,13 @@ local function farming(id,r,target)
             local ok=pcall(function() r.shake:FireServer() end)
             if not ok then return "Shake failed" end
             if S.doubleShake then
-                if not pause(CFG.shakeGap,id) then return end
+                if not pause(CFG.shakeGap,id,finished) then return end
                 if not finished() then
                     ok=pcall(function() r.shake:FireServer() end)
                     if not ok then return "Shake failed" end
                 end
             end
-            if not pause(CFG.shake,id) then return end
+            if not pause(CFG.shake,id,finished) then return end
         end
         if not done then
             local deadline=os.clock()+1.5
@@ -436,7 +482,7 @@ local function farming(id,r,target)
         S.waiting=false
         S.cycles+=1
         count.Text=S.cycles.." completed pans"
-        autoSell(id)
+        autoSell(id,S.cycles)
     end
 end
 bind(digB.MouseButton1Click,function()
