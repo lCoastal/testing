@@ -55,10 +55,108 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,s
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
 S.DIAG_LOG={}
-function S.diagEvent(kind,detail)
-    S.DIAG_LOG[#S.DIAG_LOG+1]=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
-    if #S.DIAG_LOG>240 then table.remove(S.DIAG_LOG,1) end
+-- TEMPORARY action trace. File I/O is batched in its own worker.
+S.actionTraceEnabled=true
+S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..".txt"
+local traceSuffix=1
+while fileExists(S.actionTraceFile) do
+    traceSuffix+=1
+    S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..
+        "_"..traceSuffix..".txt"
 end
+S.actionTraceHeader="GALAXIS HUB BETA | ACTION TRACE | "..
+    os.date("%Y-%m-%d %H:%M:%S").."\n"..
+    "Timestamp | elapsed | pan | zone | event | details\n"
+S.actionTraceStart=os.clock()
+S.actionTraceQueue={}
+S.actionTraceTail={}
+S.actionTraceRolling={}
+S.actionTraceError=nil
+S.actionTraceWriting=false
+S.actionTraceReady=false
+if type(writefile)=="function" then
+    local ok,err=pcall(writefile,S.actionTraceFile,S.actionTraceHeader)
+    S.actionTraceReady=ok
+    if not ok then S.actionTraceError=tostring(err) end
+else
+    S.actionTraceError="writefile unavailable"
+end
+function S.traceAction(kind,detail)
+    if not S.actionTraceEnabled then return end
+    local singleLine=(tostring(detail or ""):gsub("[\r\n]"," "))
+    local line=string.format("%s | +%.3fs | pan %s | %s | %s | %s\n",
+        os.date("%Y-%m-%d %H:%M:%S"),os.clock()-S.actionTraceStart,
+        tostring(S.cycles+1),tostring(S.dredgeAt or S.activeZone or "none"),
+        tostring(kind),singleLine)
+    local queue=S.actionTraceQueue
+    queue[#queue+1]=line
+    if #queue>1000 then table.remove(queue,1) end
+    local tail=S.actionTraceTail
+    tail[#tail+1]=line
+    if #tail>360 then table.remove(tail,1) end
+end
+function S.flushActionTrace()
+    if S.actionTraceWriting or not S.actionTraceReady or #S.actionTraceQueue==0 then return end
+    S.actionTraceWriting=true
+    local batch=S.actionTraceQueue
+    S.actionTraceQueue={}
+    -- Without appendfile, keep a bounded rolling snapshot. Never reread a
+    -- growing file, which previously risked slowing the pan loop.
+    local rolling=S.actionTraceRolling
+    for _,line in ipairs(batch) do
+        rolling[#rolling+1]=line
+        if #rolling>550 then table.remove(rolling,1) end
+    end
+    local ok,err=false,nil
+    if type(appendfile)=="function" and not S.actionTraceFallback then
+        ok,err=pcall(appendfile,S.actionTraceFile,table.concat(batch))
+        if not ok then S.actionTraceFallback=true end
+    end
+    if not ok and type(writefile)=="function" then
+        ok,err=pcall(writefile,S.actionTraceFile,
+            S.actionTraceHeader..table.concat(rolling))
+    end
+    if not ok then
+        S.actionTraceError=tostring(err)
+        local queue=S.actionTraceQueue
+        for _,line in ipairs(batch) do queue[#queue+1]=line end
+        while #queue>1000 do table.remove(queue,1) end
+    else
+        S.actionTraceError=nil
+    end
+    S.actionTraceWriting=false
+end
+task.spawn(function()
+    while S.alive do
+        task.wait(1.25)
+        S.flushActionTrace()
+    end
+    S.flushActionTrace()
+end)
+function S.diagEvent(kind,detail)
+    local line=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
+    S.DIAG_LOG[#S.DIAG_LOG+1]=line
+    if #S.DIAG_LOG>240 then table.remove(S.DIAG_LOG,1) end
+    if kind~="SAMPLE" then S.traceAction(kind,detail) end
+end
+function S.traceBegin(name,detail)
+    S.traceCurrentAction=name
+    S.traceActionStartedAt=os.clock()
+    S.traceNextStallAt=S.traceActionStartedAt+3.5
+    S.diagEvent("ACTION_START",tostring(name).." | "..tostring(detail or ""))
+end
+function S.traceEnd(name,detail)
+    local elapsed=(S.traceCurrentAction==name and S.traceActionStartedAt)
+        and (os.clock()-S.traceActionStartedAt) or 0
+    S.diagEvent("ACTION_END",string.format("%s | %.3fs | %s",
+        tostring(name),elapsed,tostring(detail or "")))
+    if S.traceCurrentAction==name then
+        S.traceCurrentAction=nil
+        S.traceActionStartedAt=nil
+        S.traceNextStallAt=nil
+    end
+end
+S.traceAction("TRACE_START","Enabled on launch; buffered writes every 1.25s")
 E.CoastalSafeFarm=S
 -- Exact Waypoints names: saved as human-selected dig/water position presets.
 -- Only explicit LOAD PRESET changes the active farm coordinates.
@@ -325,6 +423,9 @@ function S.diagReport()
         "Only local pan/position/cycle data; no remote packets or credentials.",
         "CURRENT: "..S.diagSnapshot(),
         "Last failure: "..tostring(S.diagLastFailure or "None"),
+        "ACTION TRACE FILE: "..tostring(S.actionTraceFile),
+        "Action trace enabled: "..tostring(S.actionTraceEnabled),
+        "Action trace file error: "..tostring(S.actionTraceError or "None"),
         "Anti-AFK: "..tostring(S.antiAfk),
         "Anti-AFK last activation: "..tostring(S.antiAfkLastAt or "None"),
         "Dig calls this pan: "..tostring(S.diagDigCalls or 0),
@@ -343,6 +444,10 @@ function S.diagReport()
         "RECENT EVENTS:"
     }
     for _,line in ipairs(S.DIAG_LOG) do lines[#lines+1]=line end
+    lines[#lines+1]="--- ACTION TRACE TAIL ---"
+    for i=math.max(1,#S.actionTraceTail-79),#S.actionTraceTail do
+        lines[#lines+1]=S.actionTraceTail[i]
+    end
     return table.concat(lines,"\n").."\n"
 end
 local function pause(sec,id,ready)
@@ -453,7 +558,11 @@ local dredgeButton,dredgeStatus,show,stop
 local function dredgeText(str)
     if dredgeStatus then dredgeStatus.Text=str end
     -- Update GUI on every change, but keep Output quiet.
-    if S.dredgeLastText~=str then S.dredgeLastText=str;outputDebug("[GALAXIS DREDGE] "..str) end
+    if S.dredgeLastText~=str then
+        S.dredgeLastText=str
+        S.diagEvent("DREDGE_STATUS",str)
+        outputDebug("[GALAXIS DREDGE] "..str)
+    end
 end
 local function baseDrop(s)
     return (s:gsub("%s*%(inside Firefly Zones%)","")
@@ -1858,6 +1967,8 @@ relocate(S.farmInstructions,farmPage,14,256)
 -- Anti-AFK is independent of Auto Farm/Auto Dredge.
 -- Toggle lives on Auto Farm page but applies globally while Hub is open.
 S.antiAfkButton=button("ANTI-AFK: ON",14,313,312,36,farmPage)
+S.actionTraceButton=button("ACTION TRACE: ON",14,355,312,30,farmPage)
+S.actionTraceButton.TextSize=11
 
 -- Auto Dredge: objective readout, safety switches, and 100%-quality model.
 relocate(dredgeButton,dredgePage,14,20)
@@ -2029,14 +2140,46 @@ show=function(t)
         status.Text=t
         if S.diagPhase~=t then
             S.diagPhase=t
+            S.diagPhaseStartedAt=os.clock()
+            S.tracePhaseNextStallAt=S.diagPhaseStartedAt+4
             S.diagEvent("PHASE",t)
         end
     end
 end
+-- Diagnostic-only stall checks. Does not change farming timing or state.
+task.spawn(function()
+    while S.alive do
+        task.wait(.5)
+        if S.running and S.actionTraceEnabled then
+            local now=os.clock()
+            local stage=S.traceCurrentAction
+            local since=stage and S.traceActionStartedAt or S.diagPhaseStartedAt
+            local due=stage and S.traceNextStallAt or S.tracePhaseNextStallAt
+            if since and due and now>=due then
+                S.diagEvent("STALL",string.format("action=%s elapsed=%.2fs | %s",
+                    tostring(stage or S.diagPhase or "unknown"),
+                    now-since,S.diagSnapshot()))
+                if stage then S.traceNextStallAt=now+6
+                else S.tracePhaseNextStallAt=now+6 end
+            end
+            local work=tostring(S.dredgeCurrentWork or "")
+            if S.dredge and S.traceLastDredgeWork~=work then
+                S.traceLastDredgeWork=work
+                S.diagEvent("DREDGE_TASK",work)
+            end
+        end
+    end
+end)
 bind(S.antiAfkButton.MouseButton1Click,function()
     S.antiAfk=not S.antiAfk
     S.antiAfkButton.Text="ANTI-AFK: "..(S.antiAfk and "ON" or "OFF")
     S.diagEvent("ANTI_AFK_TOGGLE",S.antiAfk and "ON" or "OFF")
+end)
+bind(S.actionTraceButton.MouseButton1Click,function()
+    if S.actionTraceEnabled then S.traceAction("TRACE_DISABLED","Disabled in GUI") end
+    S.actionTraceEnabled=not S.actionTraceEnabled
+    S.actionTraceButton.Text="ACTION TRACE: "..(S.actionTraceEnabled and "ON" or "OFF")
+    if S.actionTraceEnabled then S.traceAction("TRACE_RESUMED","Enabled in GUI") end
 end)
 -- Idle signal only: no per-frame input, no extra farming calls.
 -- bind() tracks the connection so closing/reloading Beta disconnects it.
@@ -2087,6 +2230,8 @@ end)
 stop=function()
     if not S.alive then return end
     S.diagEvent("STOP",S.diagSnapshot())
+    S.traceCurrentAction=nil
+    S.traceActionStartedAt=nil
     local hadDredge=S.dredge
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false
@@ -2125,6 +2270,7 @@ local function close()
     if not S.alive then return end
     stop()
     stopLogger()
+    S.traceAction("TRACE_CLOSE","Hub closing; remaining trace will flush")
     S.alive=false
     for _,c in ipairs(S.links) do pcall(function() c:Disconnect() end) end
     G:Destroy()
@@ -2146,6 +2292,7 @@ local function autoSell(id,cycle)
     if not S.sell or not valid(id) or S.lastQueuedCycle==cycle then return end
     S.lastQueuedCycle=cycle
     S.sellQueue[#S.sellQueue+1]={id=id,cycle=cycle,queuedAt=os.clock()}
+    S.diagEvent("SELL_QUEUED","pan "..tostring(cycle))
     if S.selling then return end
     S.selling=true
     task.spawn(function()
@@ -2165,7 +2312,13 @@ local function autoSell(id,cycle)
                 if valid(job.id) and S.sell then
                     local r=getSell()
                     if r then
-                        local ok=pcall(function() r:InvokeServer() end)
+                        local startedAt=os.clock()
+                        S.diagEvent("SELL_START","pan "..tostring(job.cycle))
+                        local ok,err=pcall(function() r:InvokeServer() end)
+                        S.diagEvent(ok and "SELL_END" or "SELL_ERROR",
+                            string.format("pan %s | %.3fs | %s",
+                                tostring(job.cycle),os.clock()-startedAt,
+                                ok and "success" or tostring(err)))
                         if not ok then show("Auto Sell failed on pan "..job.cycle) end
                     else
                         S.sell=false
