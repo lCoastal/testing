@@ -6,6 +6,7 @@
 local P = game:GetService("Players").LocalPlayer
 local UIS = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
+local HttpService = game:GetService("HttpService")
 local E = getgenv()
 if E.CoastalSafeFarm and E.CoastalSafeFarm.Close then
     pcall(function() E.CoastalSafeFarm:Close() end)
@@ -40,6 +41,93 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=false,
     sellQueue={},lastQueuedCycle=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
 E.CoastalSafeFarm=S
+-- Exact Waypoints names: saved as human-selected dig/water position presets.
+-- Only explicit LOAD PRESET changes the active farm coordinates.
+local WAYPOINT_NAMES={
+    "Crystal Caverns","Deeproot Spring","Dredge Master","Fortune River",
+    "Fortune River Delta","Frostbitten Path","Frozen Peak","Lifespring Oasis",
+    "Meteor Valley","Meteor Valley Entrance","Museum","Mystic Floodplains",
+    "Overgrown Grotto","Rotwood Swamp","Rubble Creek","Snowy Shores",
+    "Sunscorched Desert","Sunset Beach","The Magma Furnace",
+    "Timelocked Sanctuary","Volcanic Sands"
+}
+local PRESET_FILE="GalaxisHub_FarmPresets.json"
+S.presets={}
+S.selectedWaypoint=4
+S.activeWaypoint=nil
+local function packCF(cf)
+    if typeof(cf)~="CFrame" then return nil end
+    return {cf:GetComponents()}
+end
+local function unpackCF(t)
+    if type(t)~="table" or #t~=12 then return nil end
+    for i=1,12 do
+        if type(t[i])~="number" or t[i]~=t[i] or math.abs(t[i])>1e12 then return nil end
+    end
+    local ok,cf=pcall(function() return CFrame.new(table.unpack(t)) end)
+    return ok and cf or nil
+end
+local function persistPresets()
+    if type(writefile)~="function" then return false,"writefile unavailable" end
+    local ok,json=pcall(function()
+        return HttpService:JSONEncode({
+            version=1,selected=WAYPOINT_NAMES[S.selectedWaypoint],points=S.presets
+        })
+    end)
+    if not ok then return false,tostring(json) end
+    local written,err=pcall(writefile,PRESET_FILE,json)
+    return written,written and nil or tostring(err)
+end
+local function readPresets()
+    if type(readfile)~="function" then return end
+    if type(isfile)=="function" then
+        local ok,found=pcall(isfile,PRESET_FILE)
+        if ok and not found then return end
+    end
+    local ok,json=pcall(readfile,PRESET_FILE)
+    if not ok then return end
+    local decoded,data=pcall(function() return HttpService:JSONDecode(json) end)
+    if not decoded or type(data)~="table" then return end
+    for i,name in ipairs(WAYPOINT_NAMES) do
+        if name==data.selected then S.selectedWaypoint=i end
+    end
+    if type(data.points)=="table" then
+        for _,name in ipairs(WAYPOINT_NAMES) do
+            local p=data.points[name]
+            if type(p)=="table" then
+                local dig,water=unpackCF(p.dig),unpackCF(p.water)
+                if dig or water then
+                    S.presets[name]={dig=packCF(dig),water=packCF(water)}
+                end
+            end
+        end
+    end
+end
+readPresets()
+local function waypointFolder()
+    local map=workspace:FindFirstChild("Map")
+    return map and map:FindFirstChild("Waypoints")
+end
+local function getWaypointCF(obj)
+    if not (obj:IsA("BasePart") or obj:IsA("Model")) then
+        obj=obj:FindFirstChildWhichIsA("BasePart",true)
+    end
+    if not obj then return nil end
+    local ok,cf=pcall(function() return obj:GetPivot() end)
+    return ok and cf or nil
+end
+local function closestWaypoint(folder,pos)
+    local best,dist=nil,math.huge
+    for _,node in ipairs(folder:GetChildren()) do
+        local cf=getWaypointCF(node)
+        if cf then
+            local d=(cf.Position-pos).Magnitude
+            if d<dist then best=node;dist=d end
+        end
+    end
+    return best
+end
+
 local function timing(key)
     return (S.turbo and TURBO[key]) or CFG[key]
 end
@@ -295,8 +383,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,307),
-    Position=UDim2.new(.5,-170,.5,-153),
+    Size=UDim2.fromOffset(340,459),
+    Position=UDim2.new(.5,-170,.5,-230),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -336,6 +424,27 @@ local farmB=button("AUTO FARM: OFF",14,157,312,40,Body)
 -- Compact footer: the only stats shown are current pan, total minerals, and average time.
 local statsFooter=label("Pan: 0 | Minerals: 0 | Avg: --",14,213,312,27,12,FG)
 statsFooter.Font=Enum.Font.GothamBold
+
+-- Waypoint setup remains separate from the running farm.
+local prevWaypoint=button("<",14,271,36,32,Body)
+local waypointName=label("",56,271,228,32,12,FG)
+waypointName.TextXAlignment=Enum.TextXAlignment.Center
+waypointName.Font=Enum.Font.GothamMedium
+local nextWaypoint=button(">",290,271,36,32,Body)
+local loadWaypoint=button("LOAD PRESET",14,313,149,36,Body)
+local travelWaypoint=button("FAST TRAVEL",177,313,149,36,Body)
+local presetStatus=label("",14,359,312,20,11,MUTED)
+label("SET DIG / WATER saves to selected waypoint",14,384,312,19,10,MUTED)
+local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
+local function refreshPreset()
+    local name=selectedWaypoint()
+    local p=S.presets[name]
+    waypointName.Text=name
+    presetStatus.Text=((p and unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
+        " | "..((p and unpackCF(p.water)) and "Water saved" or "Water missing")..
+        (S.activeWaypoint==name and " | LOADED" or "")
+end
+refreshPreset()
 local function show(t) if S.alive then status.Text=t end end
 local function xyz(cf)
     local p=cf.Position
@@ -535,16 +644,78 @@ local function farming(id,r,target)
         autoSell(id,S.cycles)
     end
 end
-bind(digB.MouseButton1Click,function()
-    if S.running then return end
+local function applyWaypoint()
+    local p=S.presets[selectedWaypoint()]
+    S.dig=p and unpackCF(p.dig) or nil
+    S.water=p and unpackCF(p.water) or nil
+    S.activeWaypoint=selectedWaypoint()
+    digB.Text=S.dig and "DIG SAVED" or "SET DIG"
+    waterB.Text=S.water and "WATER SAVED" or "SET WATER"
+    digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
+    waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
+    refreshPreset()
+end
+local function capture(key)
+    if S.running then show("Turn AUTO FARM OFF before editing positions");return end
     local r=root()
-    if r then S.dig=r.CFrame;digB.Text="DIG SAVED";digXYZ.Text=xyz(S.dig) end
+    if not r then show("Character root unavailable");return end
+    if S.activeWaypoint~=selectedWaypoint() then applyWaypoint() end
+    local name=selectedWaypoint()
+    S.presets[name]=S.presets[name] or {}
+    S.presets[name][key]=packCF(r.CFrame)
+    if key=="dig" then S.dig=r.CFrame else S.water=r.CFrame end
+    digB.Text=S.dig and "DIG SAVED" or "SET DIG"
+    waterB.Text=S.water and "WATER SAVED" or "SET WATER"
+    digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
+    waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
+    refreshPreset()
+    local ok,err=persistPresets()
+    show(ok and (name.." "..key.." saved") or ("Saved in session only: "..tostring(err)))
+end
+bind(digB.MouseButton1Click,function() capture("dig") end)
+bind(waterB.MouseButton1Click,function() capture("water") end)
+bind(prevWaypoint.MouseButton1Click,function()
+    S.selectedWaypoint=(S.selectedWaypoint-2)%#WAYPOINT_NAMES+1
+    refreshPreset()
+    persistPresets()
 end)
-bind(waterB.MouseButton1Click,function()
-    if S.running then return end
+bind(nextWaypoint.MouseButton1Click,function()
+    S.selectedWaypoint=S.selectedWaypoint%#WAYPOINT_NAMES+1
+    refreshPreset()
+    persistPresets()
+end)
+bind(loadWaypoint.MouseButton1Click,function()
+    if S.running then show("Turn AUTO FARM OFF before loading");return end
+    local p=S.presets[selectedWaypoint()]
+    if not p or not unpackCF(p.dig) or not unpackCF(p.water) then
+        show("Save both positions for "..selectedWaypoint())
+        return
+    end
+    applyWaypoint()
+    show("Loaded "..selectedWaypoint().." preset")
+end)
+bind(travelWaypoint.MouseButton1Click,function()
+    if S.running then show("Turn AUTO FARM OFF before traveling");return end
+    local folder=waypointFolder()
     local r=root()
-    if r then S.water=r.CFrame;waterB.Text="WATER SAVED";waterXYZ.Text=xyz(S.water) end
+    if not folder or not r then show("Waypoints or character unavailable");return end
+    local to=folder:FindFirstChild(selectedWaypoint())
+    if not to then show("Selected waypoint not found");return end
+    local from=closestWaypoint(folder,r.Position)
+    if not from then show("Current waypoint could not be resolved");return end
+    if from==to then show("Already nearest to "..to.Name);return end
+    local remotes=RS:FindFirstChild("Remotes")
+    local misc=remotes and remotes:FindFirstChild("Misc")
+    local remote=misc and misc:FindFirstChild("FastTravel")
+    if not remote or not remote:IsA("RemoteEvent") then
+        show("FastTravel remote unavailable");return
+    end
+    local ok,err=pcall(function() remote:FireServer(from,to) end)
+    -- FireServer is one-way; this only confirms that the request was sent.
+    show(ok and ("Travel requested: "..from.Name.." -> "..to.Name)
+        or ("FastTravel failed: "..tostring(err):sub(1,65)))
 end)
+
 bind(sellB.MouseButton1Click,function()
     if not S.sell and not getSell() then show("SellAll unavailable");return end
     S.sell=not S.sell
@@ -610,7 +781,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,307)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,459)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
