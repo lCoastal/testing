@@ -1,4 +1,4 @@
--- COASTAL PROSPECTING | BETA FAST COMPACT
+-- COASTAL PROSPECTING | BETA AUTO RECOVERY
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
 -- Close button stops loops, disconnects listeners, flushes pending log entries.
@@ -334,8 +334,7 @@ local waterXYZ=label("Not saved",177,108,149,22,10,MUTED)
 digXYZ.TextXAlignment=Enum.TextXAlignment.Center
 waterXYZ.TextXAlignment=Enum.TextXAlignment.Center
 local sellB=button("AUTO SELL: OFF",14,141,312,36,Body)
-local startB=button("START",14,185,149,40,Body)
-local stopB=button("STOP",177,185,149,40,Body)
+local farmB=button("AUTO FARM: OFF",14,185,312,40,Body)
 local logStatus=label("Logger: starting...",14,235,312,20,11,MUTED)
 local zoneStatus=label("Zone: "..zone(),14,255,312,20,11,MUTED)
 local perfStatus=label("Last cycle: --",14,278,312,43,11,MUTED)
@@ -356,9 +355,11 @@ end)
 
 local function stop()
     if not S.alive then return end
+    -- This invalidates all current farm cycles and pending recovery retries.
     S.running=false;S.token+=1;S.waiting=false
     S.sellQueue={}
     if S.completion then S.completion:Disconnect();S.completion=nil end
+    farmB.Text="AUTO FARM: OFF"
     finishBatch()
     show("Stopped")
 end
@@ -555,31 +556,61 @@ bind(sellB.MouseButton1Click,function()
     S.sell=not S.sell
     sellB.Text="AUTO SELL: "..(S.sell and "ON" or "OFF")
 end)
-bind(startB.MouseButton1Click,function()
-    if S.running then return end
-    if not S.dig or not S.water then show("Save both positions");return end
-    local r=panTool()
-    if not r then show("Equip your pan");return end
-    local target=capacity()
-    if not target or target<=0 then show("Capacity stat unavailable");return end
-    if fill(r)==nil then show("Fill unavailable");return end
-    S.running=true;S.token+=1
-    local id=S.token
-    if r.done and r.done:IsA("RemoteEvent") then
-        S.completion=r.done.OnClientEvent:Connect(function()
-            if valid(id) and S.waiting then S.completed=true end
-        end)
+-- ON is a persistent user request. A transient farm failure does not turn
+-- the toggle off: we re-resolve the equipped pan and retry after 1 second.
+bind(farmB.MouseButton1Click,function()
+    if S.running then
+        stop()
+        return
     end
-    show("Running")
+    if not S.dig or not S.water then show("Save both positions");return end
+    S.running=true
+    S.token+=1
+    local id=S.token
+    farmB.Text="AUTO FARM: ON"
+    S.waiting=false
+    show("Starting")
+
     task.spawn(function()
-        local ok,reason=pcall(farming,id,r,target)
-        if valid(id) then
-            stop()
-            show(ok and (reason or "Stopped") or "Automation error")
+        while valid(id) do
+            local r=panTool()
+            local target=capacity()
+            local reason
+            if not r then
+                reason="Pan not equipped"
+            elseif not target or target<=0 then
+                reason="Capacity unavailable"
+            elseif fill(r)==nil then
+                reason="Fill unavailable"
+            else
+                if S.completion then
+                    S.completion:Disconnect()
+                    S.completion=nil
+                end
+                if r.done and r.done:IsA("RemoteEvent") then
+                    S.completion=r.done.OnClientEvent:Connect(function()
+                        if valid(id) and S.waiting then S.completed=true end
+                    end)
+                end
+                local ok,result=pcall(farming,id,r,target)
+                reason=ok and (result or "Cycle ended unexpectedly")
+                    or ("Runtime error: "..tostring(result))
+            end
+
+            if S.completion then
+                S.completion:Disconnect()
+                S.completion=nil
+            end
+            S.waiting=false
+
+            if valid(id) then
+                show("Recovering in 1s: "..tostring(reason):sub(1,58))
+                warn("[COASTAL] Auto recovery:",reason)
+                if not pause(1,id) then break end
+            end
         end
     end)
 end)
-bind(stopB.MouseButton1Click,stop)
 bind(X.MouseButton1Click,close)
 local minimized=false
 bind(Min.MouseButton1Click,function()
@@ -605,6 +636,13 @@ end)
 bind(UIS.InputEnded,function(i)
     if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
 end)
-bind(P.CharacterRemoving,function() if S.running then stop() end end)
+bind(P.CharacterRemoving,function()
+    -- Do not turn the toggle OFF on respawn; the worker will retry when
+    -- an equipped pan and character are available again.
+    if S.running then
+        S.waiting=false
+        show("Character changed - recovering")
+    end
+end)
 print("[COASTAL BETA] Loaded. TSV:",FILE)
 if L.error then warn("[COASTAL BETA] Logger:",L.error) end
