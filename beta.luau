@@ -388,6 +388,24 @@ local function panTool()
         end
     end
 end
+-- Find a compatible pan whether held or temporarily in Backpack.
+local function panInBackpack()
+    local bag=P:FindFirstChildOfClass("Backpack")
+    if not bag then return nil end
+    for _,tool in ipairs(bag:GetChildren()) do
+        if tool:IsA("Tool") then
+            local scripts=tool:FindFirstChild("Scripts")
+            local d=scripts and scripts:FindFirstChild("Collect")
+            local p=scripts and scripts:FindFirstChild("Pan")
+            local sh=scripts and scripts:FindFirstChild("Shake")
+            if d and p and sh and d:IsA("RemoteFunction") and
+                p:IsA("RemoteFunction") and sh:IsA("RemoteEvent") then
+                return {tool=tool,dig=d,pan=p,shake=sh,
+                    done=scripts:FindFirstChild("PanningComplete")}
+            end
+        end
+    end
+end
 local function fill(r) return tonumber(r.tool:GetAttribute("Fill")) end
 local function capacity()
     local a=P:FindFirstChild("Stats")
@@ -653,6 +671,28 @@ local function invoke(r,id,...)
         return false,nil,detail
     end
     return true,call.response,nil
+end
+-- Equip the pan only when necessary. No waits/checks on the normal
+-- hot path: an equipped pan is recognized by its Character parent.
+local function requirePanEquipped(r,id)
+    if not valid(id) then return false end
+    local character=P.Character
+    if character and r.tool.Parent==character then return true end
+    local hum=character and character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health<=0 or not r.tool:IsDescendantOf(game) then
+        return false
+    end
+    local bag=P:FindFirstChildOfClass("Backpack")
+    if not bag or r.tool.Parent~=bag then return false end
+    S.diagEvent("PAN_AUTO_EQUIP",r.tool.Name)
+    local ok=pcall(function() hum:EquipTool(r.tool) end)
+    if not ok then return false end
+    local untilAt=os.clock()+.4
+    while valid(id) and os.clock()<untilAt do
+        if r.tool.Parent==character then return true end
+        task.wait(.02)
+    end
+    return valid(id) and r.tool.Parent==character
 end
 local function move(cf,id)
     for _=1,2 do
@@ -2773,6 +2813,7 @@ local function farming(id,r,target)
         local panAttempts=0
         for _=1,15 do
             if not valid(id) then return end
+            if not requirePanEquipped(r,id) then return "Pan not equipped" end
             -- Immediately try Pan after arriving at water.
             -- Position checks are reserved for rejected Dredge calls.
             panAttempts+=1
@@ -2809,6 +2850,7 @@ local function farming(id,r,target)
         for _=1,CFG.maxShake do
             if not valid(id) then return end
             if finished() then done=true;break end
+            if not requirePanEquipped(r,id) then return "Pan unequipped during shake" end
             if not pcall(function() r.shake:FireServer() end) then return "Shake failed" end
             if S.doubleShake then
                 if not pause(timing("shakeGap"),id,finished) then return end
@@ -3162,7 +3204,8 @@ local function startWorker(asDredge)
 
     task.spawn(function()
         while valid(id) do
-            local r=panTool()
+            local r=panTool() or panInBackpack()
+            if r then requirePanEquipped(r,id) end
             local target=capacity()
             local reason
             if not r then
