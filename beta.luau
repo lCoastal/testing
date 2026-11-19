@@ -696,6 +696,11 @@ local function requirePanEquipped(r,id)
     return valid(id) and r.tool.Parent==character
 end
 local function move(cf,id)
+    if typeof(cf)~="CFrame" then
+        S.diagEvent("MOVE_MISSING_POSITION",
+            "Invalid destination; zone="..tostring(S.dredgeAt or S.activeZone))
+        return false
+    end
     for _=1,2 do
         if not valid(id) then return false end
         local r=root()
@@ -2068,11 +2073,32 @@ local function dredgeCycle(id)
         dredgeText("Timed zone closed; waiting without forced teleport")
         return false
     end
-    if S.dredgeAt~=targetZone then
-        S.dig,S.water=S.resolveDredgeDigWater(targetZone)
-        if not S.dig or not S.water then
-            dredgeText("Zone coordinates missing");return false
+    -- Always reload the target zone's coordinates, even if OFF -> ON
+    -- preserved dredgeAt. stop() restores the manual farm positions,
+    -- so matching zone names alone do not mean S.dig/S.water are valid.
+    local resolvedDig,resolvedWater=S.resolveDredgeDigWater(targetZone)
+    if not resolvedDig or not resolvedWater then
+        S.diagEvent("DREDGE_COORD_MISSING",tostring(targetZone))
+        dredgeText("Zone coordinates missing: "..tostring(targetZone))
+        return false
+    end
+    local zoneChanged=S.dredgeAt~=targetZone
+    local oldDig=S.dig
+    S.dig,S.water=resolvedDig,resolvedWater
+    if not zoneChanged and (not oldDig
+        or (oldDig.Position-resolvedDig.Position).Magnitude>30) then
+        S.diagEvent("DREDGE_COORD_RESTORED",tostring(targetZone)..
+            " | recovered dig/water after restart")
+    end
+    if not zoneChanged then
+        local rr=root()
+        if not rr or (rr.Position-resolvedDig.Position).Magnitude>165 then
+            zoneChanged=true
+            S.diagEvent("DREDGE_RESUME_RELOCATED",tostring(targetZone)..
+                " | no longer at saved deposit; navigating again")
         end
+    end
+    if zoneChanged then
         if S.dredgeTravelRetryAt and os.clock()<S.dredgeTravelRetryAt then
             dredgeText("Travel cooldown - preventing warp spam");return false
         end
