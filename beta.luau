@@ -46,7 +46,7 @@ while fileExists(FILE) do
     FILE=BASE.."_"..suffix..".txt"
 end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
-local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,digStall=2.8,recoveryDelay=.25,maxDig=600,maxShake=180}
+local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,panTimeout=12,collectTimeout=6,digStall=2.8,recoveryDelay=.25,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,selling=false,doubleShake=true,
@@ -581,6 +581,11 @@ end
 -- instead of accidentally sending a second Collect/Pan concurrently.
 local function invoke(r,id,...)
     if not valid(id) then return false,nil,"Worker stopped" end
+    -- A 3s hard timeout killed otherwise healthy Dredge sessions when
+    -- Pan's InvokeServer reply was simply slow. Wait for the same request,
+    -- never send an overlapping duplicate.
+    local timeout=(r.Name=="Pan" and CFG.panTimeout)
+        or (r.Name=="Collect" and CFG.collectTimeout) or CFG.timeout
     S.rpcInFlight=S.rpcInFlight or setmetatable({},{__mode="k"})
     local call=S.rpcInFlight[r]
     if call then
@@ -588,7 +593,7 @@ local function invoke(r,id,...)
             S.rpcInFlight[r]=nil -- previous stopped session
         else
             if not call.done then
-                local waitUntil=os.clock()+CFG.timeout*2
+                local waitUntil=os.clock()+timeout*2
                 while valid(id) and not call.done and os.clock()<waitUntil do
                     task.wait(.05)
                 end
@@ -624,12 +629,20 @@ local function invoke(r,id,...)
         end
         call.done=true
     end)
-    local deadline=os.clock()+CFG.timeout
-    while valid(id) and not call.done and os.clock()<deadline do task.wait(.01) end
+    local deadline=os.clock()+timeout
+    local reportedSlow=false
+    while valid(id) and not call.done and os.clock()<deadline do
+        if not reportedSlow and os.clock()-call.started>=CFG.timeout then
+            reportedSlow=true
+            S.diagEvent("RPC_SLOW_WAIT",r.Name..
+                " exceeded 3s; waiting for original server reply, no duplicate sent")
+        end
+        task.wait(.02)
+    end
     if not valid(id) then return false,nil,"Worker stopped" end
     if not call.done then
         local detail=string.format("%s timed out after %.1fs (still in flight)",
-            r.Name,CFG.timeout)
+            r.Name,timeout)
         S.diagEvent("RPC_TIMEOUT",detail)
         return false,nil,detail
     end
