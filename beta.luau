@@ -46,13 +46,13 @@ while fileExists(FILE) do
     FILE=BASE.."_"..suffix..".txt"
 end
 local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
-local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,digStall=1.25,recoveryDelay=.25,maxDig=600,maxShake=180}
+local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,digStall=2.8,recoveryDelay=.25,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
 local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,selling=false,doubleShake=true,
     antiAfk=true,earlyTP=false,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
-    sellQueue={},lastQueuedCycle=0}
+    sellQueue={},lastQueuedCycle=0,panFirstRejects=0,panReadyDelay=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
 S.DIAG_LOG={}
 -- TEMPORARY action trace. File I/O is batched in its own worker.
@@ -2741,7 +2741,10 @@ local function farming(id,r,target)
                 end
                 if not pause(timing("dig"),id) then return end
             end
-            if os.clock()-lastProgress>CFG.digStall then
+            -- A slow successful Collect reply can arrive before the Fill
+            -- attribute replicates. Re-check Fill before declaring a stall.
+            if os.clock()-lastProgress>CFG.digStall
+                and (fill(r) or 0)<target-.01 then
                 S.diagDigStalls=(S.diagDigStalls or 0)+1
                 S.diagEvent("DIG_STALLED","last fill="..tostring(fill(r))..
                     " target="..tostring(target)..
@@ -2778,6 +2781,12 @@ local function farming(id,r,target)
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
         local panStart=os.clock()
+        -- If the server repeatedly rejects the FIRST Pan after moving,
+        -- use a small learned settling delay rather than wasting an RPC.
+        -- Only after confirmed repeats; cap at 0.30s.
+        if (S.panReadyDelay or 0)>0 then
+            if not pause(S.panReadyDelay,id) then return end
+        end
         S.traceBegin("PAN_INVOKE","fill="..tostring(fill(r)))
         local accepted=false
         local panAttempts=0
@@ -2793,14 +2802,33 @@ local function farming(id,r,target)
                     tostring(invokeError).." | "..S.diagSnapshot())
                 return "Pan call failed: "..tostring(invokeError)
             end
-            if result==true then accepted=true;break end
+            if result==true then
+                accepted=true
+                if panAttempts==1 then
+                    S.panFirstRejects=math.max(0,(S.panFirstRejects or 0)-1)
+                    if S.panFirstRejects==0 then
+                        S.panReadyDelay=math.max(0,(S.panReadyDelay or 0)-.025)
+                    end
+                end
+                break
+            end
+            if panAttempts==1 then
+                S.panFirstRejects=math.min(8,(S.panFirstRejects or 0)+1)
+                if S.panFirstRejects>=3 then
+                    S.panReadyDelay=math.min(.30,(S.panReadyDelay or 0)+.05)
+                    S.diagEvent("PAN_ADAPT_DELAY",
+                        string.format("first-try rejects=%d next pre-pan delay=%.3fs",
+                            S.panFirstRejects,S.panReadyDelay))
+                end
+            end
             S.diagEvent("PAN_REJECT","response="..tostring(result).." | "..S.diagSnapshot())
             if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
         local panTime=os.clock()-panStart
         S.traceEnd("PAN_INVOKE",string.format(
-            "accepted after %d attempt(s), %.3fs",panAttempts,panTime))
+            "accepted after %d attempt(s), %.3fs; learnedDelay=%.3fs",
+            panAttempts,panTime,S.panReadyDelay or 0))
 
         show("Shaking")
         local shakeStart=os.clock()
@@ -2883,8 +2911,9 @@ local function farming(id,r,target)
             if not pause(.10,id) then return end
         end
         local shakeTime=os.clock()-shakeStart
-        S.traceEnd("SHAKE_LOOP","rewards="..tostring(S.rewards)..
-            " completed="..tostring(S.completed))
+        S.traceEnd("SHAKE_LOOP","locallyObservedRewards="..tostring(S.rewards)..
+            " completed="..tostring(S.completed)..
+            " (quest progress tracked separately)")
 
         S.waiting=false
         if S.dredge then
