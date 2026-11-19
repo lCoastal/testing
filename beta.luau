@@ -916,6 +916,25 @@ local function groupBest(group,places,L,per)
         local matches=true
         for _,q in ipairs(group) do if not has[q.m] then matches=false;break end end
         if matches then
+            -- Timelocked Sanctuary is safer than Rotwood Swamp. When the
+            -- Sanctuary is open and contains every mineral in this group,
+            -- never choose Rotwood for that same group, regardless of the
+            -- fitted rarity/pans estimate. Rotwood-only minerals remain
+            -- available through Rotwood when risky zones are enabled.
+            if baseDrop(z)=="Rotwood Swamp" and openNow("Timelocked Sanctuary")
+                and eligible("Timelocked Sanctuary",5) then
+                local safePool={}
+                for _,entry in ipairs(poolFor("Timelocked Sanctuary")) do
+                    safePool[entry[1]]=true
+                end
+                local covered=true
+                for _,q in ipairs(group) do
+                    if not safePool[q.m] then covered=false;break end
+                end
+                if covered then matches=false end
+            end
+        end
+        if matches then
             for c=0,#CAPS do
                 local cap=c==0 and nil or CAPS[c]
                 if cap==nil or cap<L then
@@ -3922,12 +3941,97 @@ local function startWorker(asDredge)
         end
     end)
 end
+-- Dredge intent is separate from a worker's lifetime. A death invalidates
+-- the old character, pan, and RPC session, then starts a fresh session after
+-- the new character and inventory are replicated. Manual OFF cancels this.
+S.dredgeWanted=false
+S.dredgeRespawnSerial=0
+local function cancelDredgeRespawn()
+    S.dredgeWanted=false
+    S.dredgeRespawnSerial+=1
+end
+local function onDredgeDeath()
+    if not S.alive or not S.dredgeWanted or S.dredgeRespawnPending then return end
+    S.dredgeRespawnPending=true
+    S.dredgeRespawnSerial+=1
+    local serial=S.dredgeRespawnSerial
+    S.diagEvent("DREDGE_DEATH","Character died; invalidating old worker, waiting to respawn")
+    if S.running then stop() end
+    -- Death means the saved departure zone no longer describes where we
+    -- physically are. Always navigate from the new spawn location.
+    S.dredgeResumeZone=nil
+    S.dredgeAt=nil
+    task.spawn(function()
+        local started=os.clock()
+        while S.alive and S.dredgeWanted
+            and S.dredgeRespawnSerial==serial do
+            local c=P.Character
+            local hum=c and c:FindFirstChildOfClass("Humanoid")
+            local rr=c and c:FindFirstChild("HumanoidRootPart")
+            local bag=P:FindFirstChildOfClass("Backpack")
+            if hum and hum.Health>0 and rr and bag then
+                -- The custom inventory and equipped pan can replicate later.
+                -- Dredge can plan without an equipped pan, but give it a
+                -- short window so the first Collect uses the new Tool.
+                if os.clock()-started>=3 and (panTool() or S.panInBackpack()
+                    or os.clock()-started>=12) then
+                    S.dredgeRespawnPending=false
+                    S.diagEvent("DREDGE_RESPAWN_READY",string.format(
+                        "spawn=%.1f,%.1f,%.1f pan=%s elapsed=%.1fs",
+                        rr.Position.X,rr.Position.Y,rr.Position.Z,
+                        tostring((panTool() or S.panInBackpack())~=nil),
+                        os.clock()-started))
+                    startWorker(true)
+                    if S.running then
+                        S.diagEvent("DREDGE_RESPAWN_RESTART",
+                            "Fresh quest plan and route from actual spawn")
+                    else
+                        S.diagEvent("DREDGE_RESPAWN_START_FAILED",
+                            "startWorker did not start; check executor/quest")
+                    end
+                    return
+                end
+            end
+            task.wait(.35)
+        end
+        S.dredgeRespawnPending=false
+    end)
+end
+local function watchDredgeCharacter(character)
+    local hum=character:FindFirstChildOfClass("Humanoid")
+        or character:WaitForChild("Humanoid",10)
+    if hum then
+        bind(hum.Died,function()
+            if character==P.Character then onDredgeDeath() end
+        end)
+    end
+end
+bind(P.CharacterAdded,function(character)
+    -- CharacterAdded may fire before the old Humanoid.Died connection
+    -- does, or when the character is replaced without a death event.
+    if S.dredgeWanted and not S.dredgeRespawnPending then
+        S.diagEvent("DREDGE_CHARACTER_REPLACED",
+            "Character changed; preparing fresh Dredge session")
+        onDredgeDeath()
+    end
+    task.spawn(watchDredgeCharacter,character)
+end)
+if P.Character then task.spawn(watchDredgeCharacter,P.Character) end
 bind(farmB.MouseButton1Click,function()
+    cancelDredgeRespawn()
     if S.running then stop() else startWorker(false) end
 end)
 bind(dredgeButton.MouseButton1Click,function()
-    if S.running then stop();dredgeText("Dredge stopped")
-    else startWorker(true) end
+    if S.running or S.dredgeRespawnPending then
+        cancelDredgeRespawn()
+        if S.running then stop() end
+        S.dredgeRespawnPending=false
+        dredgeText("Dredge stopped")
+    else
+        S.dredgeWanted=true
+        startWorker(true)
+        if not S.running then S.dredgeWanted=false end
+    end
 end)
 task.spawn(function()
     while S.alive do
