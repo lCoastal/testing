@@ -196,11 +196,11 @@ S.selectedWaypoint=waypointIndex["Fortune River"]
 S.selectedZone=zoneIndex["Fortune River"]
 S.activeZone=nil
 
-local function packCF(cf)
+function S.packCF(cf)
     if typeof(cf)~="CFrame" then return nil end
     return {cf:GetComponents()}
 end
-local function unpackCF(t)
+function S.unpackCF(t)
     if type(t)~="table" or #t~=12 then return nil end
     for i=1,12 do
         if type(t[i])~="number" or t[i]~=t[i] or math.abs(t[i])>1e12 then return nil end
@@ -208,7 +208,7 @@ local function unpackCF(t)
     local ok,cf=pcall(function() return CFrame.new(table.unpack(t)) end)
     return ok and cf or nil
 end
-local function decodePresetFile(name)
+function S.decodePresetFile(name)
     if type(readfile)~="function" then return nil end
     if type(isfile)=="function" then
         local ok,exists=pcall(isfile,name)
@@ -219,7 +219,7 @@ local function decodePresetFile(name)
     local decoded,data=pcall(function() return HttpService:JSONDecode(raw) end)
     return decoded and type(data)=="table" and data or nil
 end
-local function savePresets()
+function S.savePresets()
     if type(writefile)~="function" then return false,"writefile unavailable" end
     local ok,json=pcall(function()
         return HttpService:JSONEncode({
@@ -233,9 +233,9 @@ local function savePresets()
     local written,err=pcall(writefile,PRESET_FILE,json)
     return written,written and nil or tostring(err)
 end
-local function validPreset(p)
+function S.validPreset(p)
     if type(p)~="table" then return nil end
-    local dig,water=unpackCF(p.dig),unpackCF(p.water)
+    local dig,water=S.unpackCF(p.dig),S.unpackCF(p.water)
     local waypoint=type(p.waypoint)=="string" and waypointIndex[p.waypoint] and p.waypoint or nil
     -- Optional sparse points, ordered from the mapped stone to the dig
     -- location. The same points are used backward when returning.
@@ -243,12 +243,12 @@ local function validPreset(p)
     if type(p.route)=="table" then
         route={}
         for _,node in ipairs(p.route) do
-            local cf=unpackCF(node)
-            if cf and #route<12 then route[#route+1]=packCF(cf) end
+            local cf=S.unpackCF(node)
+            if cf and #route<12 then route[#route+1]=S.packCF(cf) end
         end
     end
     if dig or water or waypoint or route then
-        return {dig=packCF(dig),water=packCF(water),waypoint=waypoint,route=route}
+        return {dig=S.packCF(dig),water=S.packCF(water),waypoint=waypoint,route=route}
     end
     return nil
 end
@@ -274,16 +274,16 @@ local OLD_DEEPROOT_JSON=[==[{"dig":[262.697265625,-163.9412078857422,1128.542724
 local OLD_DEEPROOT=HttpService:JSONDecode(OLD_DEEPROOT_JSON)
 local OLD_INFERNAL_JSON=[==[{"dig":[-1154.800537109375,-87.84814453125,44.64744567871094,0.9450898170471191,1.2503302571076347e-7,-0.32681071758270264,-1.160604625738415e-7,1,4.695521127473512e-8,0.32681071758270264,-6.447089084815616e-9,0.9450898170471191],"water":[-1152.23876953125,-90.15330505371094,53.036827087402344,-0.8495063781738281,-2.6581373546719078e-8,-0.5275783538818359,4.203474901487425e-9,1,-5.715217810120521e-8,0.5275783538818359,-5.076880071896994e-8,-0.8495063781738281]}]==]
 local OLD_INFERNAL=HttpService:JSONDecode(OLD_INFERNAL_JSON)
-local function isPreviousCF(a,b)
+function S.isPreviousCF(a,b)
     if type(a)~="table" or type(b)~="table" or #a~=12 or #b~=12 then return false end
     for i=1,12 do if math.abs(a[i]-b[i])>.001 then return false end end
     return true
 end
-local function loadPresets()
+function S.loadPresets()
     local ok,builtin=pcall(function() return HttpService:JSONDecode(DEFAULT_ZONE_PRESETS_JSON) end)
     if ok and type(builtin)=="table" and type(builtin.zones)=="table" then
         for _,name in ipairs(ZONE_NAMES) do
-            local p=validPreset(builtin.zones[name])
+            local p=S.validPreset(builtin.zones[name])
             if p then
                 S.defaultPresets[name]=p
                 S.presets[name]=mergePreset({},p)
@@ -291,18 +291,18 @@ local function loadPresets()
         end
     end
     -- Preserve waypoint presets created by earlier versions as optional manual imports.
-    local legacy=decodePresetFile(OLD_PRESET_FILE)
+    local legacy=S.decodePresetFile(OLD_PRESET_FILE)
     if legacy and type(legacy.points)=="table" then
         for _,wp in ipairs(WAYPOINT_NAMES) do
-            local old=validPreset(legacy.points[wp])
+            local old=S.validPreset(legacy.points[wp])
             if old then
                 S.legacyWaypoints[wp]=old
                 if zoneIndex[wp] then
                     local moved={dig=old.dig,water=old.water,waypoint=wp}
                     -- Ignore only the old Deeproot default, not user customization.
                     if wp=="Deeproot Spring" then
-                        if isPreviousCF(moved.dig,OLD_DEEPROOT.dig) then moved.dig=nil end
-                        if isPreviousCF(moved.water,OLD_DEEPROOT.water) then moved.water=nil end
+                        if S.isPreviousCF(moved.dig,OLD_DEEPROOT.dig) then moved.dig=nil end
+                        if S.isPreviousCF(moved.water,OLD_DEEPROOT.water) then moved.water=nil end
                     end
                     S.overrides[wp]=mergePreset(S.overrides[wp],moved)
                     S.presets[wp]=mergePreset(S.presets[wp],moved)
@@ -311,22 +311,22 @@ local function loadPresets()
         end
     end
     -- Existing v2 files are user-specific and override only fields they contain.
-    local saved=decodePresetFile(PRESET_FILE)
+    local saved=S.decodePresetFile(PRESET_FILE)
     if saved and saved.version==2 and type(saved.zones)=="table" then
         for _,name in ipairs(ZONE_NAMES) do
-            local parsed=validPreset(saved.zones[name])
+            local parsed=S.validPreset(saved.zones[name])
             if parsed then
                 if name=="Frostbite River" then
-                    if isPreviousCF(parsed.dig,OLD_FROSTBITE.dig) then parsed.dig=nil end
-                    if isPreviousCF(parsed.water,OLD_FROSTBITE.water) then parsed.water=nil end
+                    if S.isPreviousCF(parsed.dig,OLD_FROSTBITE.dig) then parsed.dig=nil end
+                    if S.isPreviousCF(parsed.water,OLD_FROSTBITE.water) then parsed.water=nil end
                 elseif name=="Deeproot Spring" then
-                    if isPreviousCF(parsed.dig,OLD_DEEPROOT.dig) then parsed.dig=nil end
-                    if isPreviousCF(parsed.water,OLD_DEEPROOT.water) then parsed.water=nil end
+                    if S.isPreviousCF(parsed.dig,OLD_DEEPROOT.dig) then parsed.dig=nil end
+                    if S.isPreviousCF(parsed.water,OLD_DEEPROOT.water) then parsed.water=nil end
                 elseif name=="Infernal Heart" then
                     -- Old built-in sand/water positions were broken; don't
                     -- allow those exact values to mask the corrected base.
-                    if isPreviousCF(parsed.dig,OLD_INFERNAL.dig) then parsed.dig=nil end
-                    if isPreviousCF(parsed.water,OLD_INFERNAL.water) then parsed.water=nil end
+                    if S.isPreviousCF(parsed.dig,OLD_INFERNAL.dig) then parsed.dig=nil end
+                    if S.isPreviousCF(parsed.water,OLD_INFERNAL.water) then parsed.water=nil end
                 end
                 S.overrides[name]=mergePreset(S.overrides[name],parsed)
                 S.presets[name]=mergePreset(S.presets[name],parsed)
@@ -342,12 +342,12 @@ local function loadPresets()
         end
     end
 end
-loadPresets()
-local function waypointFolder()
+S.loadPresets()
+function S.waypointFolder()
     local map=workspace:FindFirstChild("Map")
     return map and map:FindFirstChild("Waypoints")
 end
-local function getWaypointCF(obj)
+function S.getWaypointCF(obj)
     if not (obj:IsA("BasePart") or obj:IsA("Model")) then
         obj=obj:FindFirstChildWhichIsA("BasePart",true)
     end
@@ -355,10 +355,10 @@ local function getWaypointCF(obj)
     local ok,cf=pcall(function() return obj:GetPivot() end)
     return ok and cf or nil
 end
-local function closestWaypoint(folder,pos)
+function S.closestWaypoint(folder,pos)
     local best,dist=nil,math.huge
     for _,node in ipairs(folder:GetChildren()) do
-        local cf=getWaypointCF(node)
+        local cf=S.getWaypointCF(node)
         if cf then
             local d=(cf.Position-pos).Magnitude
             if d<dist then best=node;dist=d end
@@ -367,7 +367,7 @@ local function closestWaypoint(folder,pos)
     return best
 end
 
-local function timing(key)
+function S.timing(key)
     return (S.turbo and TURBO[key]) or CFG[key]
 end
 
@@ -390,7 +390,7 @@ local function panTool()
     end
 end
 -- Find a compatible pan whether held or temporarily in Backpack.
-local function panInBackpack()
+function S.panInBackpack()
     local bag=P:FindFirstChildOfClass("Backpack")
     if not bag then return nil end
     for _,tool in ipairs(bag:GetChildren()) do
@@ -408,7 +408,7 @@ local function panInBackpack()
     end
 end
 local function fill(r) return tonumber(r.tool:GetAttribute("Fill")) end
-local function capacity()
+function S.capacity()
     local a=P:FindFirstChild("Stats")
     return a and tonumber(a:GetAttribute("Capacity"))
 end
@@ -416,7 +416,7 @@ function S.diagSnapshot()
     local r=root()
     local pan=panTool()
     local f=pan and fill(pan)
-    local cap=capacity()
+    local cap=S.capacity()
     local function distance(cf)
         return (r and cf) and string.format("%.1f",(r.Position-cf.Position).Magnitude) or "N/A"
     end
@@ -702,7 +702,7 @@ local function move(cf,id)
         if not r then return false end
         if (r.Position-cf.Position).Magnitude<7 then return true end
         local ok=pcall(function() r.CFrame=cf end)
-        if not ok or not pause(timing("teleport"),id) then return false end
+        if not ok or not pause(S.timing("teleport"),id) then return false end
         r=root()
         if r and (r.Position-cf.Position).Magnitude<10 then return true end
     end
@@ -823,7 +823,7 @@ local function totemNear(pos)
             and (n:find("lumin",1,true) or n:find("light",1,true)) then
             checked+=1
             if checked>100 then break end
-            local cf=getWaypointCF(obj)
+            local cf=S.getWaypointCF(obj)
             if cf and (cf.Position-pos).Magnitude<65
                 and (obj:GetAttribute("Active")==true or obj:GetAttribute("Enabled")==true) then
                 return true
@@ -836,8 +836,8 @@ local function eligible(z,tier)
     if z:find("inside Firefly Zones",1,true) then return false end
     local base=baseDrop(z)
     local preset=S.presets[base]
-    if not zoneIndex[base] or not preset or not unpackCF(preset.dig)
-        or not unpackCF(preset.water) or not waypointIndex[preset.waypoint or ""] then return false end
+    if not zoneIndex[base] or not preset or not S.unpackCF(preset.dig)
+        or not S.unpackCF(preset.water) or not waypointIndex[preset.waypoint or ""] then return false end
     if base=="The Void" or base=="Haunted Creek" or base=="North Pole"
         or base=="Seashell Beach" or base:find("Tomb Vein",1,true) then return false end
     if base=="Magma Furnace" then return false end -- Cannot verify fire protection
@@ -1159,7 +1159,7 @@ local function stableAt(cf,id,radius,hold,maxWait)
 end
 -- Record the actual walking path into Enchanted Ruins, not just the
 -- coarse user-defined preset nodes. Only enabled during inbound travel.
-local function recordEnchantedStep()
+function S.recordEnchantedStep()
     local path=S.enchantedRecording
     if not path then return end
     local r=root()
@@ -1242,7 +1242,7 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
                         failures+=1
                         break
                     end
-                    recordEnchantedStep()
+                    S.recordEnchantedStep()
                 end
             end
             r=root()
@@ -1397,7 +1397,7 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
         tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
     for i=1,(reverse and startIndex or #nodes) do
         local index=reverse and (startIndex-i+1) or i
-        local cf=unpackCF(nodes[index])
+        local cf=S.unpackCF(nodes[index])
         if cf then
             local r=root()
             if not r then return false,"Character missing" end
@@ -1486,7 +1486,7 @@ end
 -- Return along the actual successful inbound steps, in reverse order.
 -- Frequent breadcrumbs make steep Enchanted Ruins ramps reversible without
 -- asking the navigator to invent a new route around the cliff.
-local function returnViaEnchantedPath(id)
+function S.returnViaEnchantedPath(id)
     local steps=S.enchantedInboundRoute
     if not steps or #steps<3 then return false,"No recorded inbound route" end
     S.diagEvent("ENCHANTED_REVERSE_START",
@@ -1519,9 +1519,9 @@ local function returnToMappedStone(id)
     local oldZone=S.dredgeAt
     if not oldZone then return true end
     local p=S.presets[oldZone]
-    local folder=waypointFolder()
+    local folder=S.waypointFolder()
     local obj=p and folder and folder:FindFirstChild(p.waypoint or "")
-    local stone=obj and getWaypointCF(obj)
+    local stone=obj and S.getWaypointCF(obj)
     if not stone then return false,"Old zone waypoint missing: "..oldZone end
     local r=root()
     if not r then return false,"Character missing" end
@@ -1540,7 +1540,7 @@ local function returnToMappedStone(id)
         local nodes=p.route or {}
         local firstUpper=#nodes
         for i=#nodes,1,-1 do
-            local cf=unpackCF(nodes[i])
+            local cf=S.unpackCF(nodes[i])
             if cf and cf.Position.Y>-160 then
                 firstUpper=i
                 break
@@ -1553,7 +1553,7 @@ local function returnToMappedStone(id)
     local ok,err
     if oldZone=="Enchanted Ruins" and S.enchantedInboundRoute
         and #S.enchantedInboundRoute>=3 then
-        ok,err=returnViaEnchantedPath(id)
+        ok,err=S.returnViaEnchantedPath(id)
     else
         -- If script was started inside the Ruins or the prior route was
         -- never recorded, retain the preset reverse-route fallback.
@@ -1573,14 +1573,14 @@ local function returnToMappedStone(id)
 end
 local function walkFromStoneToZone(zoneName,id)
     local p=S.presets[zoneName]
-    local target=p and unpackCF(p.dig)
+    local target=p and S.unpackCF(p.dig)
     if not target then return false,"Missing dig coordinates: "..zoneName end
     S.dredgeCurrentWork="Walking from stone to "..zoneName
     local recording=zoneName=="Enchanted Ruins"
     if recording then
         S.enchantedInboundRoute=nil
         S.enchantedRecording={}
-        recordEnchantedStep()
+        S.recordEnchantedStep()
         S.diagEvent("ENCHANTED_RECORD_START","Recording actual walk to deposit")
     end
     local ok,err=followRoutePoints(zoneName,id,false)
@@ -1595,7 +1595,7 @@ local function walkFromStoneToZone(zoneName,id)
     end
     local settled=stableAt(target,id,12,1.0,3.1)
     if recording then
-        recordEnchantedStep()
+        S.recordEnchantedStep()
         local steps=S.enchantedRecording
         S.enchantedRecording=nil
         if settled and steps and #steps>=3 then
@@ -1608,10 +1608,10 @@ local function walkFromStoneToZone(zoneName,id)
     return false,"Reached dig position but did not stay there"
 end
 local function goWaypoint(wp,id)
-    local folder=waypointFolder()
+    local folder=S.waypointFolder()
     local r=root()
     local to=folder and folder:FindFirstChild(wp or "")
-    local target=to and getWaypointCF(to)
+    local target=to and S.getWaypointCF(to)
     if not r or not target then return false,"Waypoint missing: "..tostring(wp) end
     if (r.Position-target.Position).Magnitude<65 then
         return stableAt(target,id,78,1.0,2.5)
@@ -1632,14 +1632,14 @@ local function goWaypoint(wp,id)
     if oldZone then
         local preset=S.presets[oldZone]
         local mapped=preset and folder:FindFirstChild(preset.waypoint or "")
-        local mappedCF=mapped and getWaypointCF(mapped)
+        local mappedCF=mapped and S.getWaypointCF(mapped)
         if mappedCF and (r.Position-mappedCF.Position).Magnitude<=65 then
             from=mapped
         end
     end
-    from=from or closestWaypoint(folder,r.Position)
+    from=from or S.closestWaypoint(folder,r.Position)
     if not from then return false,"No departure waypoint found" end
-    local origin=getWaypointCF(from)
+    local origin=S.getWaypointCF(from)
     if not origin then return false,"Departure waypoint has no pivot" end
     if (r.Position-origin.Position).Magnitude>52 then
         S.dredgeCurrentWork="Walking to departure stone "..from.Name
@@ -1680,7 +1680,7 @@ local function approachDredgeNPC(id)
             or actors:FindFirstChild("Dredge Master",true))
     end
     if not npc then return true,"NPC model not exposed; relying on QuestTalked" end
-    local npcCF=getWaypointCF(npc)
+    local npcCF=S.getWaypointCF(npc)
     if not npcCF then return true,"NPC has no readable pivot" end
     local r=root()
     if r and (r.Position-npcCF.Position).Magnitude<=12 then return true end
@@ -1761,7 +1761,7 @@ end
 
 local function safeDig()
     local x=S.presets["Fortune River"]
-    return x and unpackCF(x.dig)
+    return x and S.unpackCF(x.dig)
 end
 local function escapeZone()
     -- No long-range CFrame here: this was causing repeated rubber-banding.
@@ -1787,7 +1787,7 @@ local function describeDredgeTargets(group,remaining)
 end
 -- Abyssal flare maintenance. Runs only in Auto Dredge while stationed
 -- inside Abyssal Depth, never inside the fast Collect/Pan/Shake loops.
-local function nearbyFireflyFlare()
+function S.nearbyFireflyFlare()
     local r=root()
     if not r then return false end
     -- A placed flare is a world object, not a Tool in Character/Backpack.
@@ -1817,7 +1817,7 @@ local function maintainAbyssFlare(id)
     local now=os.clock()
     if now<(S.abyssFlareNextCheck or 0) then return end
     S.abyssFlareNextCheck=now+5
-    if nearbyFireflyFlare() then
+    if S.nearbyFireflyFlare() then
         S.abyssFlareLastSeen=now
         return
     end
@@ -1847,7 +1847,7 @@ local function maintainAbyssFlare(id)
     local hum=c and c:FindFirstChildOfClass("Humanoid")
     if not hum or hum.Health<=0 then return end
     -- Wait until between pans to temporarily equip the consumable.
-    local equippedPan=panTool() or panInBackpack()
+    local equippedPan=panTool() or S.panInBackpack()
     S.diagEvent("ABYSS_FLARE_ATTEMPT","Using "..flare.Name)
     if flare.Parent~=c then hum:EquipTool(flare) end
     if not pause(.12,id) then return end
@@ -1921,7 +1921,7 @@ local function dredgeCycle(id)
     S.dredgeStartAt=nil
     local st=P:FindFirstChild("Stats")
     local raw=st and tonumber(st:GetAttribute("Luck"))
-    local capacityNow=capacity()
+    local capacityNow=S.capacity()
     if not raw or raw<=0 or not capacityNow or capacityNow<=0 then
         dredgeText("Stats.Luck/Capacity unavailable");return false
     end
@@ -2041,7 +2041,7 @@ local function dredgeCycle(id)
         return false
     end
     if S.dredgeAt~=targetZone then
-        S.dig=unpackCF(p.dig);S.water=unpackCF(p.water)
+        S.dig=S.unpackCF(p.dig);S.water=S.unpackCF(p.water)
         if not S.dig or not S.water then
             dredgeText("Zone coordinates missing");return false
         end
@@ -2269,7 +2269,7 @@ local function logItem(item)
     L.lastItem=os.clock()
 end
 -- Read the existing log once at startup to resume pan numbering.
-local function logStats(raw)
+function S.logStats(raw)
     local maxPan,count=0,0
     for line in raw:gmatch("[^\r\n]+") do
         local n=tonumber(line:match("^[^\t]*\t([^\t]+)\t"))
@@ -2280,7 +2280,7 @@ local function logStats(raw)
     end
     return maxPan,count
 end
-local function initializeMineralFile()
+function S.initializeMineralFile()
     if type(writefile)~="function" then
         L.error="writefile unavailable"
         return
@@ -2297,7 +2297,7 @@ local function initializeMineralFile()
                 L.error="Existing log format differs; cannot safely append"
                 return
             end
-            L.pan,L.minerals=logStats(raw)
+            L.pan,L.minerals=S.logStats(raw)
         else
             local written,err=pcall(writefile,FILE,HEADER)
             if not written then L.error=tostring(err) end
@@ -2307,8 +2307,8 @@ local function initializeMineralFile()
         if not ok then L.error=tostring(err) end
     end
 end
-initializeMineralFile()
-local function switchToNewMineralLog()
+S.initializeMineralFile()
+function S.switchToNewMineralLog()
     if not L.running then return false,"Logger stopped" end
     if L.writing then return false,"Write in progress; try again" end
     finishBatch()
@@ -2467,18 +2467,18 @@ local riskButton=button("RISKY ZONES: OFF",177,606,149,32,Body)
 local fullQualityLabel=label("PAN QUALITY: 100%  |  LUCK: FULL (1x)",14,647,312,32,11,FG)
 dredgeStatus=label("Dredge idle",14,684,312,22,11,MUTED)
 dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
-local function selectedZone() return ZONE_NAMES[S.selectedZone] end
-local function selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
+function S.selectedZone() return ZONE_NAMES[S.selectedZone] end
+function S.selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local routeCountLabel
 local diagZoneName,diagSavedStatus
-local function refreshPreset()
-    local name=selectedZone()
+function S.refreshPreset()
+    local name=S.selectedZone()
     local p=S.presets[name]
     zoneName.Text=name
-    waypointName.Text=selectedWaypoint()
+    waypointName.Text=S.selectedWaypoint()
     local mapping=p and p.waypoint or nil
-    presetStatus.Text=((p and unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
-        " | "..((p and unpackCF(p.water)) and "Water saved" or "Water missing")..
+    presetStatus.Text=((p and S.unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
+        " | "..((p and S.unpackCF(p.water)) and "Water saved" or "Water missing")..
         (mapping and (" | WP: "..mapping) or " | WP: NOT MAPPED")
     if routeCountLabel then
         routeCountLabel.Text="Route: "..tostring(p and p.route and #p.route or 0)..
@@ -2486,12 +2486,12 @@ local function refreshPreset()
     end
     if diagZoneName then diagZoneName.Text=name end
     if diagSavedStatus then
-        diagSavedStatus.Text=((p and unpackCF(p.dig)) and "DIG: SAVED" or "DIG: NOT SAVED")..
-            "    |    "..((p and unpackCF(p.water)) and "WATER: SAVED" or "WATER: NOT SAVED")
+        diagSavedStatus.Text=((p and S.unpackCF(p.dig)) and "DIG: SAVED" or "DIG: NOT SAVED")..
+            "    |    "..((p and S.unpackCF(p.water)) and "WATER: SAVED" or "WATER: NOT SAVED")
     end
     -- Only explicit MAP TO WAYPOINT commits the selector to this zone.
 end
-refreshPreset()
+S.refreshPreset()
 
 -- ===== COMPACT 5-TAB INTERFACE =====
 -- The existing farm, Dredge and preset controls are the exact same objects
@@ -2544,7 +2544,7 @@ S.newMineralLogButton.TextSize=11
 bind(S.newMineralLogButton.MouseButton1Click,function()
     if S.logRotateBusy then return end
     S.logRotateBusy=true
-    local ok,fileOrError=switchToNewMineralLog()
+    local ok,fileOrError=S.switchToNewMineralLog()
     if ok then
         show("Mineral log changed: "..fileOrError)
     else
@@ -2584,7 +2584,7 @@ relocate(S.zoneLiveInfo,diagnosticPage,14,35)
 S.diagZoneHeading=label("SAVE POSITIONS FOR ZONE",14,108,312,22,10,MUTED)
 relocate(S.diagZoneHeading,diagnosticPage,14,108)
 S.diagPrevZone=button("<",14,134,36,32,diagnosticPage)
-diagZoneName=label(selectedZone(),56,134,228,32,12,FG)
+diagZoneName=label(S.selectedZone(),56,134,228,32,12,FG)
 diagZoneName.TextXAlignment=Enum.TextXAlignment.Center
 diagZoneName.Font=Enum.Font.GothamMedium
 relocate(diagZoneName,diagnosticPage,56,134)
@@ -2596,7 +2596,7 @@ relocate(diagSavedStatus,diagnosticPage,14,218)
 S.debugReportButton=button("COPY DEBUG REPORT",14,252,312,28,diagnosticPage)
 S.debugReportButton.TextSize=11
 S.editPresets=button("EDIT ZONE PRESETS / WALK ROUTES",14,284,312,36,diagnosticPage)
-refreshPreset()
+S.refreshPreset()
 S.presetEditor=make("ScrollingFrame",{
     Position=UDim2.fromOffset(10,170),
     Size=UDim2.new(1,-20,1,-181),
@@ -2638,7 +2638,7 @@ S.clearWalkRoute=button("CLEAR WALK ROUTE",167,382,149,34,S.presetEditor)
 routeCountLabel=label("Route: 0 points (stone -> dig)",4,425,306,40,10,MUTED)
 routeCountLabel.TextWrapped=true
 relocate(routeCountLabel,S.presetEditor,4,425)
-refreshPreset()
+S.refreshPreset()
 S.editPresets.MouseButton1Click:Connect(function()
     S.presetEditor.Visible=not S.presetEditor.Visible
     local showMain=not S.presetEditor.Visible
@@ -2793,11 +2793,11 @@ task.spawn(function()
                 "Running: "..tostring(S.running).." | Mode: "..(S.dredge and "DREDGE" or "FARM")..
                 "\nPhase: "..tostring(S.diagPhase or "Idle")..
                 "\nAction: "..action.." ("..age..")"..
-                "\nSelected: "..tostring(selectedZone())..
+                "\nSelected: "..tostring(S.selectedZone())..
                 "\nLoaded: "..tostring(S.dredgeAt or S.activeZone or "none")..
                 "\nPan: "..tostring(pan and pan.tool.Name or "NOT EQUIPPED")..
                 "\nFill: "..tostring(pan and fill(pan) or "N/A")..
-                    " / "..tostring(capacity() or "N/A")..
+                    " / "..tostring(S.capacity() or "N/A")..
                 "\nDistance: dig "..d(S.dig).." | water "..d(S.water)..
                 "\nHP: "..tostring(hp and math.floor(hp.Health) or "N/A")..
                 "\nLast Collect: "..tostring(S.diagLastCollectMs or "N/A").." ms"..
@@ -3074,7 +3074,7 @@ local function farming(id,r,target)
             if not pause(.3,id) then return end
             continue
         end
-        target=capacity() or target
+        target=S.capacity() or target
         local cycleStart=os.clock()
         S.diagEvent("CYCLE_START","fill="..tostring(fill(r))..
             " target="..tostring(target).." zone="..tostring(S.dredgeAt or S.activeZone))
@@ -3101,7 +3101,7 @@ local function farming(id,r,target)
             S.diagLastCollectMs=math.floor((os.clock()-sent)*1000+.5)
             S.diagLastCollectResult=ok and tostring(response) or tostring(err)
             if not ok then return "Collect failed: "..tostring(err) end
-            if not pause(timing("dig"),id) then return end
+            if not pause(S.timing("dig"),id) then return end
             local after=fill(r)
             if after and after>before+.001 then
                 lastProgress=os.clock()
@@ -3167,7 +3167,7 @@ local function farming(id,r,target)
                     if not farmMove(S.water,id) then return "Water recovery failed" end
                 end
             end
-            if not pause(timing("panRetry"),id) then return end
+            if not pause(S.timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
         S.traceEnd("PAN_INVOKE",string.format(
@@ -3188,14 +3188,14 @@ local function farming(id,r,target)
             if not requirePanEquipped(r,id) then return "Pan unequipped during shake" end
             if not pcall(function() r.shake:FireServer() end) then return "Shake failed" end
             if S.doubleShake then
-                if not pause(timing("shakeGap"),id,finished) then return end
+                if not pause(S.timing("shakeGap"),id,finished) then return end
                 if not finished() then
                     if not pcall(function() r.shake:FireServer() end) then
                         return "Shake failed"
                     end
                 end
             end
-            if not pause(timing("shake"),id,finished) then return end
+            if not pause(S.timing("shake"),id,finished) then return end
         end
         if not done then
             local deadline=os.clock()+1.5
@@ -3227,25 +3227,25 @@ local function farming(id,r,target)
 end
 
 local function applyZone()
-    local name=selectedZone()
+    local name=S.selectedZone()
     local p=S.presets[name]
-    S.dig=p and unpackCF(p.dig) or nil
-    S.water=p and unpackCF(p.water) or nil
+    S.dig=p and S.unpackCF(p.dig) or nil
+    S.water=p and S.unpackCF(p.water) or nil
     S.activeZone=name
     digB.Text=S.dig and "DIG SAVED" or "SET DIG"
     waterB.Text=S.water and "WATER SAVED" or "SET WATER"
     digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
     waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
-    refreshPreset()
+    S.refreshPreset()
 end
 local function capture(key)
     if S.running then show("Turn AUTO FARM OFF before editing");return end
     local r=root()
     if not r then show("Character root unavailable");return end
-    if S.activeZone~=selectedZone() then applyZone() end
-    local name=selectedZone()
+    if S.activeZone~=S.selectedZone() then applyZone() end
+    local name=S.selectedZone()
     S.presets[name]=S.presets[name] or {}
-    local packed=packCF(r.CFrame)
+    local packed=S.packCF(r.CFrame)
     S.presets[name][key]=packed
     S.overrides[name]=S.overrides[name] or {}
     S.overrides[name][key]=packed
@@ -3254,8 +3254,8 @@ local function capture(key)
     waterB.Text=S.water and "WATER SAVED" or "SET WATER"
     digXYZ.Text=S.dig and xyz(S.dig) or "Not saved"
     waterXYZ.Text=S.water and xyz(S.water) or "Not saved"
-    refreshPreset()
-    local ok,err=savePresets()
+    S.refreshPreset()
+    local ok,err=S.savePresets()
     show(ok and (name.." "..key.." saved") or ("Session only: "..tostring(err)))
 end
 bind(digB.MouseButton1Click,function() capture("dig") end)
@@ -3264,16 +3264,16 @@ bind(S.diagSaveDig.MouseButton1Click,function() capture("dig") end)
 bind(S.diagSaveWater.MouseButton1Click,function() capture("water") end)
 local function selectZone(i)
     S.selectedZone=(i-1)%#ZONE_NAMES+1
-    local p=S.presets[selectedZone()]
+    local p=S.presets[S.selectedZone()]
     if p and p.waypoint and waypointIndex[p.waypoint] then
         S.selectedWaypoint=waypointIndex[p.waypoint]
     end
-    refreshPreset()
+    S.refreshPreset()
     -- Selecting a deposit should also load its farming coordinates.
     -- Previously selection only changed the label, leaving S.dig/water
     -- pointed at the last loaded zone until LOAD ZONE was pressed.
     if not S.running then applyZone() end
-    savePresets()
+    S.savePresets()
 end
 bind(prevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
 bind(nextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
@@ -3281,27 +3281,27 @@ bind(S.diagPrevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) en
 bind(S.diagNextZone.MouseButton1Click,function() selectZone(S.selectedZone+1) end)
 bind(prevWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=(S.selectedWaypoint-2)%#WAYPOINT_NAMES+1
-    refreshPreset()
-    savePresets()
+    S.refreshPreset()
+    S.savePresets()
 end)
 bind(nextWaypoint.MouseButton1Click,function()
     S.selectedWaypoint=S.selectedWaypoint%#WAYPOINT_NAMES+1
-    refreshPreset()
-    savePresets()
+    S.refreshPreset()
+    S.savePresets()
 end)
 bind(S.addWalkPoint.MouseButton1Click,function()
     if S.running then show("Stop the farm before recording a route");return end
     local r=root()
     if not r then show("Character position unavailable");return end
-    local name=selectedZone()
+    local name=S.selectedZone()
     local p=S.presets[name] or {}
     if not p.waypoint then show("Map this zone to a waypoint first");return end
     local nodes=p.route or {}
     if #nodes>=12 then show("Maximum 12 route points");return end
     local previous=nodes[#nodes]
-    local cf=packCF(r.CFrame)
+    local cf=S.packCF(r.CFrame)
     if previous then
-        local last=unpackCF(previous)
+        local last=S.unpackCF(previous)
         if last and (last.Position-r.Position).Magnitude<5 then
             show("Walk at least 5 studs before adding another point")
             return
@@ -3314,39 +3314,39 @@ bind(S.addWalkPoint.MouseButton1Click,function()
     S.presets[name]=p
     S.overrides[name]=S.overrides[name] or {}
     S.overrides[name].route=newRoute
-    local ok,err=savePresets()
-    refreshPreset()
+    local ok,err=S.savePresets()
+    S.refreshPreset()
     show(ok and ("Saved walk point "..#newRoute.." for "..name) or
         ("Route saved only in session: "..tostring(err)))
 end)
 bind(S.clearWalkRoute.MouseButton1Click,function()
     if S.running then show("Stop the farm before changing routes");return end
-    local name=selectedZone()
+    local name=S.selectedZone()
     S.presets[name]=S.presets[name] or {}
     S.presets[name].route={}
     S.overrides[name]=S.overrides[name] or {}
     S.overrides[name].route={}
-    local ok,err=savePresets()
-    refreshPreset()
+    local ok,err=S.savePresets()
+    S.refreshPreset()
     show(ok and ("Cleared walk route for "..name) or
         ("Cleared only in session: "..tostring(err)))
 end)
 bind(mapWaypoint.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before editing mappings");return end
-    local name,wp=selectedZone(),selectedWaypoint()
+    local name,wp=S.selectedZone(),S.selectedWaypoint()
     S.presets[name]=S.presets[name] or {}
     S.presets[name].waypoint=wp
     S.overrides[name]=S.overrides[name] or {}
     S.overrides[name].waypoint=wp
-    local ok,err=savePresets()
-    refreshPreset()
+    local ok,err=S.savePresets()
+    S.refreshPreset()
     show(ok and (name.." -> "..wp) or ("Mapping session only: "..tostring(err)))
 end)
 bind(loadZone.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before loading");return end
-    local name=selectedZone()
+    local name=S.selectedZone()
     local p=S.presets[name]
-    if not p or not unpackCF(p.dig) or not unpackCF(p.water) then
+    if not p or not S.unpackCF(p.dig) or not S.unpackCF(p.water) then
         show("Save both positions for "..name)
         return
     end
@@ -3355,30 +3355,30 @@ bind(loadZone.MouseButton1Click,function()
 end)
 bind(importLegacy.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before importing");return end
-    local name,wp=selectedZone(),selectedWaypoint()
+    local name,wp=S.selectedZone(),S.selectedWaypoint()
     local old=S.legacyWaypoints[wp]
     if not old or not (old.dig or old.water) then
         show("No legacy positions for "..wp);return
     end
     local existing=S.presets[name]
-    if existing and (unpackCF(existing.dig) or unpackCF(existing.water)) then
+    if existing and (S.unpackCF(existing.dig) or S.unpackCF(existing.water)) then
         show("Zone already has positions; won't overwrite");return
     end
     local imported={dig=old.dig,water=old.water,waypoint=wp}
     S.presets[name]=mergePreset(S.presets[name],imported)
     S.overrides[name]=mergePreset(S.overrides[name],imported)
-    local ok,err=savePresets()
-    refreshPreset()
+    local ok,err=S.savePresets()
+    S.refreshPreset()
     show(ok and ("Imported old "..wp.." to "..name) or ("Imported in session: "..tostring(err)))
 end)
 bind(travelWaypoint.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before traveling");return end
-    local folder=waypointFolder()
+    local folder=S.waypointFolder()
     local r=root()
     if not folder or not r then show("Waypoints or character unavailable");return end
-    local to=folder:FindFirstChild(selectedWaypoint())
+    local to=folder:FindFirstChild(S.selectedWaypoint())
     if not to then show("Selected waypoint not found");return end
-    local from=closestWaypoint(folder,r.Position)
+    local from=S.closestWaypoint(folder,r.Position)
     if not from then show("Current waypoint could not be resolved");return end
     if from==to then show("Already nearest to "..to.Name);return end
     local remotes=RS:FindFirstChild("Remotes")
@@ -3397,15 +3397,15 @@ end)
 -- Export all zone mappings and full-precision coordinates as a shareable text report.
 -- Includes all 21 in-game waypoint pivots for reference, but the warp remote uses Instances.
 -- Export is ONLY triggered by clicking the button (never on every mineral).
-local function exportCFrame(cf)
+function S.exportCFrame(cf)
     if typeof(cf)~="CFrame" then return "" end
     local parts={cf:GetComponents()}
     local out={}
     for i=1,#parts do out[i]=string.format("%.17g",parts[i]) end
     return table.concat(out,",")
 end
-local function exportZoneCFrame(serialized)
-    return exportCFrame(unpackCF(serialized))
+function S.exportZoneCFrame(serialized)
+    return S.exportCFrame(S.unpackCF(serialized))
 end
 bind(exportPresetButton.MouseButton1Click,function()
     local lines={
@@ -3422,10 +3422,10 @@ bind(exportPresetButton.MouseButton1Click,function()
     for _,name in ipairs(ZONE_NAMES) do
         local p=S.presets[name] or {}
         local wp=p.waypoint or ""
-        local dig,water=exportZoneCFrame(p.dig),exportZoneCFrame(p.water)
+        local dig,water=S.exportZoneCFrame(p.dig),S.exportZoneCFrame(p.water)
         local routeParts={}
         for _,point in ipairs(p.route or {}) do
-            routeParts[#routeParts+1]=exportZoneCFrame(point)
+            routeParts[#routeParts+1]=S.exportZoneCFrame(point)
         end
         if wp~="" then mapped+=1 end
         if dig~="" and water~="" then complete+=1 end
@@ -3434,10 +3434,10 @@ bind(exportPresetButton.MouseButton1Click,function()
     lines[#lines+1]=""
     lines[#lines+1]="=== FAST TRAVEL WAYPOINTS (21) ==="
     lines[#lines+1]="Waypoint\\tWorld CFrame"
-    local folder=waypointFolder()
+    local folder=S.waypointFolder()
     for _,name in ipairs(WAYPOINT_NAMES) do
         local obj=folder and folder:FindFirstChild(name)
-        local cf=obj and getWaypointCF(obj)
+        local cf=obj and S.getWaypointCF(obj)
         lines[#lines+1]=name.."\t"..exportCFrame(cf)
     end
     lines[#lines+1]=""
@@ -3560,9 +3560,9 @@ local function startWorker(asDredge)
                 if not pause(.3,id) then break end
                 continue
             end
-            local r=panTool() or panInBackpack()
+            local r=panTool() or S.panInBackpack()
             if r then requirePanEquipped(r,id) end
-            local target=capacity()
+            local target=S.capacity()
             local reason
             if not r then
                 reason="Pan not equipped"
