@@ -1410,6 +1410,63 @@ local function followRoutePoints(zoneName,id,reverse)
         (reverse and " -> warp" or " -> dig"))
     return valid(id)
 end
+-- Abyssal Depth exit requires a real rope ProximityPrompt; ordinary
+-- walking cannot traverse the vertical shaft. Cobalt's GetData is unrelated.
+local function climbAbyssRope(id)
+    local map=workspace:FindFirstChild("Map")
+    local lush=map and map:FindFirstChild("LushCaverns")
+    local assets=lush and lush:FindFirstChild("AbyssAssets")
+    local rope=assets and assets:FindFirstChild("Rope")
+    local interact=rope and rope:FindFirstChild("RopeInteract")
+    local prompt=interact and interact:FindFirstChild("Prompt")
+    if not prompt or not prompt:IsA("ProximityPrompt") then
+        return false,"Abyss rope ProximityPrompt missing"
+    end
+    local r=root()
+    if not r then return false,"Character missing at Abyss rope" end
+    local before=r.Position.Y
+    local pos=interact.Position
+    -- Already above the rope exit: don't descend to press it again.
+    if before>pos.Y+35 then return true end
+    S.dredgeCurrentWork="Climbing Abyssal Depth rope"
+    S.diagEvent("ABYSS_ROPE_APPROACH",
+        string.format("dist=%.1f y=%.1f", (r.Position-pos).Magnitude,before))
+    if (r.Position-pos).Magnitude>math.max(5,prompt.MaxActivationDistance-1) then
+        local ok,reason=walkRoute(CFrame.new(pos),id,350,true)
+        if not ok then return false,"Cannot reach rope: "..tostring(reason) end
+    end
+    r=root()
+    if not r or (r.Position-pos).Magnitude>prompt.MaxActivationDistance then
+        return false,"Not inside Abyss rope prompt range"
+    end
+    if not prompt.Enabled then return false,"Abyss rope prompt disabled" end
+    local used=false
+    if type(fireproximityprompt)=="function" then
+        used=pcall(fireproximityprompt,prompt)
+    end
+    if not used then
+        used=pcall(function()
+            prompt:InputHoldBegin()
+            task.wait(math.max(1.1,prompt.HoldDuration+.15))
+            prompt:InputHoldEnd()
+        end)
+    end
+    if not used then return false,"Could not activate rope prompt" end
+    S.diagEvent("ABYSS_ROPE_TRIGGERED","Waiting for climb teleport")
+    local deadline=os.clock()+9
+    while valid(id) and os.clock()<deadline do
+        r=root()
+        if r and (r.Position.Y>before+18 or
+            (r.Position-pos).Magnitude>35 and r.Position.Y>pos.Y+8) then
+            S.diagEvent("ABYSS_ROPE_EXIT_OK",
+                string.format("height gained %.1f",r.Position.Y-before))
+            return true
+        end
+        task.wait(.12)
+    end
+    return false,"Rope activated but exit movement not confirmed"
+end
+
 local function returnToMappedStone(id)
     local oldZone=S.dredgeAt
     if not oldZone then return true end
@@ -1423,8 +1480,19 @@ local function returnToMappedStone(id)
     if (r.Position-stone.Position).Magnitude<=52
         and stableAt(stone,id,60,.35,1.5) then return true end
     S.dredgeCurrentWork="Walking back to "..tostring(p.waypoint).." stone"
+    if oldZone=="Abyssal Depth" then
+        local escaped,escapeErr=climbAbyssRope(id)
+        if not escaped then
+            S.diagEvent("ABYSS_ROPE_EXIT_FAILED",tostring(escapeErr))
+            return false,escapeErr
+        end
+    end
     local ok,err=followRoutePoints(oldZone,id,true)
-    if not ok then return false,err end
+    if not ok then
+        S.diagEvent("DREDGE_RETURN_ROUTE_FAILED",
+            tostring(oldZone).." -> "..tostring(p.waypoint).." | "..tostring(err))
+        return false,err
+    end
     -- Do not insist on walking into the stone's exact (often blocked) pivot.
     return approachStone(stone,id,p.waypoint)
 end
