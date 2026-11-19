@@ -3274,6 +3274,20 @@ task.spawn(function()
     end
 end)
 bind(X.MouseButton1Click,close)
+-- C toggles the entire UI without stopping automation or logging.
+-- Ignore typing in chat/text inputs and other consumed keypresses.
+local interfaceHidden=false
+S.ToggleInterface=function()
+    if not S.alive then return end
+    interfaceHidden=not interfaceHidden
+    G.Enabled=not interfaceHidden
+end
+bind(UIS.InputBegan,function(input,gameProcessed)
+    if gameProcessed or input.UserInputType~=Enum.UserInputType.Keyboard
+        or input.KeyCode~=Enum.KeyCode.C then return end
+    if UIS:GetFocusedTextBox() then return end
+    S.ToggleInterface()
+end)
 local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
