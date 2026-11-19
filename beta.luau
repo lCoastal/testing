@@ -2168,6 +2168,12 @@ relocate(S.farmInstructions,farmPage,14,256)
 S.antiAfkButton=button("ANTI-AFK: ON",14,313,312,36,farmPage)
 S.actionTraceButton=button("ACTION TRACE: ON",14,355,312,30,farmPage)
 S.actionTraceButton.TextSize=11
+S.turboButton=button("TURBO: ON",14,253,149,36,farmPage)
+S.doubleShakeButton=button("DOUBLE SHAKE: ON",177,253,149,36,farmPage)
+relocate(S.farmInstructions,farmPage,14,295)
+relocate(S.antiAfkButton,farmPage,14,341)
+relocate(S.actionTraceButton,farmPage,14,383)
+S.actionTraceButton.Size=UDim2.fromOffset(312,25)
 
 -- Auto Dredge: objective readout, safety switches, and 100%-quality model.
 relocate(dredgeButton,dredgePage,14,20)
@@ -2502,6 +2508,16 @@ bind(S.antiAfkButton.MouseButton1Click,function()
     S.antiAfkButton.Text="ANTI-AFK: "..(S.antiAfk and "ON" or "OFF")
     S.diagEvent("ANTI_AFK_TOGGLE",S.antiAfk and "ON" or "OFF")
 end)
+bind(S.turboButton.MouseButton1Click,function()
+    S.turbo=not S.turbo
+    S.turboButton.Text="TURBO: "..(S.turbo and "ON" or "OFF")
+    S.diagEvent("TURBO_TOGGLE",tostring(S.turbo))
+end)
+bind(S.doubleShakeButton.MouseButton1Click,function()
+    S.doubleShake=not S.doubleShake
+    S.doubleShakeButton.Text="DOUBLE SHAKE: "..(S.doubleShake and "ON" or "OFF")
+    S.diagEvent("DOUBLE_SHAKE_TOGGLE",tostring(S.doubleShake))
+end)
 bind(S.actionTraceButton.MouseButton1Click,function()
     if S.actionTraceEnabled then S.traceAction("TRACE_DISABLED","Disabled in GUI") end
     S.actionTraceEnabled=not S.actionTraceEnabled
@@ -2660,37 +2676,28 @@ local function autoSell(id,cycle)
         S.selling=false
     end)
 end
+-- TURBO / DOUBLE SHAKE CLASSIC FARM: the older, reliable core.
+-- Deliberately no adaptive Pan delays, per-call position corrections,
+-- early movement, automatic tuning, or nested recovery state machine.
 local function farming(id,r,target)
     while valid(id) do
         if S.dredge and not dredgeCycle(id) then
             if not valid(id) then return end
-            -- The 1.5-second pause was unnecessarily delaying the next
-            -- cycle when quest/progress/zone state just needed to settle.
             if not pause(.3,id) then return end
             continue
         end
-        -- Refresh capacity each cycle, including equipment/buff changes.
-        local newCapacity=capacity()
-        if newCapacity and newCapacity>0 then target=newCapacity end
+        target=capacity() or target
         local cycleStart=os.clock()
         S.diagEvent("CYCLE_START","fill="..tostring(fill(r))..
             " target="..tostring(target).." zone="..tostring(S.dredgeAt or S.activeZone))
         show("Digging")
-        S.traceBegin("MOVE_TO_DIG","distance to sand="..
-            (root() and S.dig and
-                string.format("%.1f",(root().Position-S.dig.Position).Magnitude) or "N/A"))
-        local movedToDig=farmMove(S.dig,id)
-        S.traceEnd("MOVE_TO_DIG","success="..tostring(movedToDig))
-        if not movedToDig then return "Could not reach dig position" end
-        local freshlyChanged=S.dredge and S.dredgeAt and
-            (S.cycles-(S.dredgeZoneCycle or 0))<2
-        -- After a zone switch, give the new deposit enough time to register
-        -- before firing the normal rapid Collect calls. Normal pans unchanged.
-        if freshlyChanged and not pause(.42,id) then return end
+        S.traceBegin("MOVE_TO_DIG","")
+        local moved=farmMove(S.dig,id)
+        S.traceEnd("MOVE_TO_DIG","success="..tostring(moved))
+        if not moved then return "Dig teleport failed" end
+
+        S.traceBegin("COLLECT_TO_CAPACITY",tostring(fill(r)).." / "..tostring(target))
         local lastProgress=os.clock()
-        S.traceBegin("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
-            " / "..tostring(target))
-        local lastStallLog=lastProgress
         S.diagDigProgressAt=lastProgress
         S.diagDigCalls=0
         for _=1,CFG.maxDig do
@@ -2698,244 +2705,104 @@ local function farming(id,r,target)
             local before=fill(r)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
-            if not ensureFarmPosition(S.dig,id,"COLLECT") then
-                return "Dig position unstable / server correction"
-            end
-            -- Track the interval spent waiting for Collect's SERVER response.
-            -- This records lag without changing request cadence or timing.
-            local sentAt=os.clock()
-            S.diagCollectPendingAt=sentAt
-            local ok,response,invokeError=invoke(r.dig,id,1)
-            local elapsed=os.clock()-sentAt
+            local sent=os.clock()
+            S.diagCollectPendingAt=sent
+            local ok,response,err=invoke(r.dig,id,1)
             S.diagCollectPendingAt=nil
-            S.diagLastCollectMs=math.floor(elapsed*1000+.5)
-            S.diagLastCollectResult=ok and tostring(response) or tostring(invokeError)
             S.diagDigCalls+=1
-            if elapsed>=.65 then
-                S.diagEvent("COLLECT_SLOW",
-                    string.format("%.2fs %s before=%s after=%s",
-                        elapsed,tostring(ok and response or invokeError),
-                        tostring(before),tostring(fill(r))))
-            end
-            if not ok then
-                S.diagEvent("COLLECT_CALL_FAILED",
-                    tostring(invokeError).." | "..S.diagSnapshot())
-                return "Collect failed: "..tostring(invokeError)
-            end
-            -- InvokeServer already waits for a server reply. On acknowledged
-            -- Fill progress, go straight to the next Collect with no extra sleep.
-            -- Only back off when replication/progress has not caught up.
+            S.diagLastCollectMs=math.floor((os.clock()-sent)*1000+.5)
+            S.diagLastCollectResult=ok and tostring(response) or tostring(err)
+            if not ok then return "Collect failed: "..tostring(err) end
+            if not pause(timing("dig"),id) then return end
             local after=fill(r)
             if after and after>before+.001 then
                 lastProgress=os.clock()
                 S.diagDigProgressAt=lastProgress
-                lastStallLog=lastProgress
-            else
-                local now=os.clock()
-                if now-lastProgress>=.55 and now-lastStallLog>=.55 then
-                    lastStallLog=now
-                    S.diagEvent("DIG_NO_PROGRESS",string.format(
-                        "%.2fs unchanged at %s/%s; Collect reply=%s",
-                        now-lastProgress,tostring(after),tostring(target),
-                        tostring(response)))
-                end
-                if not pause(timing("dig"),id) then return end
-            end
-            -- A slow successful Collect reply can arrive before the Fill
-            -- attribute replicates. Re-check Fill before declaring a stall.
-            if os.clock()-lastProgress>CFG.digStall
-                and (fill(r) or 0)<target-.01 then
-                S.diagDigStalls=(S.diagDigStalls or 0)+1
-                S.diagEvent("DIG_STALLED","last fill="..tostring(fill(r))..
-                    " target="..tostring(target)..
-                    " last Collect ms="..tostring(S.diagLastCollectMs))
-                return "Digging stalled"
+            elseif os.clock()-lastProgress>3 then
+                return "Digging stalled (3s without Fill progress)"
             end
         end
-        S.diagCollectPendingAt=nil
         S.traceEnd("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
-            " / "..tostring(target)..
-            " | collectCalls="..tostring(S.diagDigCalls))
-        if not valid(id) then return end
-        if (fill(r) or 0)<target-.01 then
-            S.diagEvent("PAN_NOT_FULL",S.diagSnapshot())
-            return "Pan not full"
-        end
-        if S.dredge then
-            -- Collect's acknowledged Fill progress is already replicated.
-            -- Verify it immediately instead of adding 80ms every pan.
-            local finalFill=fill(r)
-            if not finalFill or finalFill<target-.01 then
-                return "Dig fill not confirmed"
-            end
-        end
+            " / "..tostring(target).." calls="..tostring(S.diagDigCalls))
+        if (fill(r) or 0)<target-.01 then return "Pan not full" end
         local digTime=os.clock()-cycleStart
 
         show("Panning")
         local waterStart=os.clock()
-        S.traceBegin("MOVE_TO_WATER","fill="..tostring(fill(r)))
-        local movedToWater=farmMove(S.water,id)
-        S.traceEnd("MOVE_TO_WATER","success="..tostring(movedToWater))
-        if not movedToWater then return "Could not reach water" end
-        if freshlyChanged and not pause(.5,id) then return end
+        S.traceBegin("MOVE_TO_WATER","")
+        moved=farmMove(S.water,id)
+        S.traceEnd("MOVE_TO_WATER","success="..tostring(moved))
+        if not moved then return "Water teleport failed" end
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
         local panStart=os.clock()
-        -- If the server repeatedly rejects the FIRST Pan after moving,
-        -- use a small learned settling delay rather than wasting an RPC.
-        -- Only after confirmed repeats; cap at 0.30s.
-        if (S.panReadyDelay or 0)>0 then
-            if not pause(S.panReadyDelay,id) then return end
-        end
         S.traceBegin("PAN_INVOKE","fill="..tostring(fill(r)))
         local accepted=false
         local panAttempts=0
         for _=1,15 do
-            panAttempts+=1
             if not valid(id) then return end
-            if not ensureFarmPosition(S.water,id,"PAN") then
-                return "Water position unstable / server correction"
-            end
-            local ok,result,invokeError=invoke(r.pan,id)
-            if not ok then
-                S.diagEvent("PAN_CALL_FAILED",
-                    tostring(invokeError).." | "..S.diagSnapshot())
-                return "Pan call failed: "..tostring(invokeError)
-            end
-            if result==true then
-                accepted=true
-                if panAttempts==1 then
-                    S.panFirstRejects=math.max(0,(S.panFirstRejects or 0)-1)
-                    if S.panFirstRejects==0 then
-                        S.panReadyDelay=math.max(0,(S.panReadyDelay or 0)-.025)
-                    end
-                end
-                break
-            end
-            if panAttempts==1 then
-                S.panFirstRejects=math.min(8,(S.panFirstRejects or 0)+1)
-                if S.panFirstRejects>=3 then
-                    S.panReadyDelay=math.min(.30,(S.panReadyDelay or 0)+.05)
-                    S.diagEvent("PAN_ADAPT_DELAY",
-                        string.format("first-try rejects=%d next pre-pan delay=%.3fs",
-                            S.panFirstRejects,S.panReadyDelay))
-                end
-            end
-            S.diagEvent("PAN_REJECT","response="..tostring(result).." | "..S.diagSnapshot())
+            panAttempts+=1
+            local ok,response,err=invoke(r.pan,id)
+            if not ok then return "Pan call failed: "..tostring(err) end
+            if response==true then accepted=true;break end
             if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
-        local panTime=os.clock()-panStart
         S.traceEnd("PAN_INVOKE",string.format(
-            "accepted after %d attempt(s), %.3fs; learnedDelay=%.3fs",
-            panAttempts,panTime,S.panReadyDelay or 0))
+            "accepted after %d attempt(s), %.3fs",panAttempts,os.clock()-panStart))
+        local panTime=os.clock()-panStart
 
         show("Shaking")
+        S.traceBegin("SHAKE_LOOP","doubleShake="..tostring(S.doubleShake))
         local shakeStart=os.clock()
-        S.traceBegin("SHAKE_LOOP","rewards=0 | doubleShake="..tostring(S.doubleShake))
-        local earlyMoved=false
-        local earlyTime=0
         local function finished()
-            local now=os.clock()
-            if not S.dredge then
-                return S.completed or (S.rewards>0 and now-S.lastReward>=CFG.rewardGap)
-            end
-            -- PanningComplete is the authoritative end of a pan.
-            -- Do not keep shaking/standing idle for a second afterward.
-            if S.completed then return true end
-            -- Only when the event is missing, conservatively use a
-            -- reward-quiet fallback to avoid dropping late minerals.
-            return S.rewards>0 and now-panStart>=1.8 and
-                now-S.lastReward>=1.15
+            return S.completed or
+                (S.rewards>0 and os.clock()-S.lastReward>=CFG.rewardGap)
         end
-        -- Experimental early travel after first two rewards and a very short lull.
-        -- Starts at ~30ms of quiet instead of ~165ms. If leaving water
-        -- interrupts remaining rewards, switch Early TP OFF for that zone.
-        -- No further shake packets are sent after teleporting.
-        local function tryEarlyMove()
-            if S.dredge or not S.earlyTP or earlyMoved or S.completed or S.rewards<2
-                or freshlyChanged then return false end
-            if os.clock()-S.lastReward < math.max(.03,CFG.rewardGap*.10) then return false end
-            show("Early teleport (test)")
-            local t=os.clock()
-            if not move(S.dig,id) then return nil,"Early teleport failed" end
-            earlyTime=os.clock()-t
-            earlyMoved=true
-            return true
-        end
-
         local done=false
         for _=1,CFG.maxShake do
             if not valid(id) then return end
             if finished() then done=true;break end
-            local jumped,err=tryEarlyMove()
-            if err then return err end
-            if jumped then break end
-
-            local ok=pcall(function() r.shake:FireServer() end)
-            if not ok then return "Shake failed" end
+            if not pcall(function() r.shake:FireServer() end) then return "Shake failed" end
             if S.doubleShake then
                 if not pause(timing("shakeGap"),id,finished) then return end
-                if finished() then done=true;break end
-                jumped,err=tryEarlyMove()
-                if err then return err end
-                if jumped then break end
-                ok=pcall(function() r.shake:FireServer() end)
-                if not ok then return "Shake failed" end
+                if not finished() then
+                    if not pcall(function() r.shake:FireServer() end) then
+                        return "Shake failed"
+                    end
+                end
             end
             if not pause(timing("shake"),id,finished) then return end
         end
-
         if not done then
-            local deadline=os.clock()+(earlyMoved and 3 or 1.5)
+            local deadline=os.clock()+1.5
             while valid(id) and os.clock()<deadline do
                 if finished() then done=true;break end
                 task.wait(.02)
             end
         end
-        if not done then
-            S.diagEvent("NO_COMPLETION",S.diagSnapshot())
-            if S.rewards==0 then
-                S.diagEvent("PAN_NO_REWARDS",
-                    "Pan accepted, but zero rewards and no completion event; "..
-                    "stopping instead of repeatedly invoking stalled remotes")
-                return "Pan accepted but server delivered no rewards or completion"
-            end
-            return "No completion detected"
-        end
-        if not valid(id) then return end
-        if S.dredge and S.completed then
-            -- One short grace period after the authoritative completion event.
-            -- No second 0.52-second wait; the reward fallback has already
-            -- waited sufficiently if no completion event fired.
-            if not pause(.10,id) then return end
-        end
-        local shakeTime=os.clock()-shakeStart
-        S.traceEnd("SHAKE_LOOP","locallyObservedRewards="..tostring(S.rewards)..
-            " completed="..tostring(S.completed)..
-            " (quest progress tracked separately)")
-
+        if not done then return "No completion detected" end
+        S.traceEnd("SHAKE_LOOP","completed="..tostring(S.completed)..
+            " locallyObservedRewards="..tostring(S.rewards))
         S.waiting=false
         if S.dredge then
             S.dredgeFailureCount=0
             S.dredgeFailureZone=S.dredgeAt
         end
         S.cycles+=1
+        S.simpleFailures=0
         local total=os.clock()-cycleStart
         S.totalCycleTime+=total
         local recent=S.recentTimes
         recent[#recent+1]=total
         if #recent>10 then table.remove(recent,1) end
-        local sum=0
-        for _,v in ipairs(recent) do sum+=v end
-        local ppm=sum>0 and (60*#recent/sum) or 0
         S.diagEvent("CYCLE_DONE",string.format(
-            "cycle=%d total=%.3fs dig=%.3fs water=%.3fs pan=%.3fs shake=%.3fs rewards=%d",
-            S.cycles,total,digTime,waterTime,panTime,shakeTime,S.rewards))
-        -- Footer refreshes independently every 0.25s.
+            "cycle=%d total=%.3fs dig=%.3fs water=%.3fs pan=%.3fs shake=%.3fs",
+            S.cycles,total,digTime,waterTime,panTime,os.clock()-shakeStart))
         autoSell(id,S.cycles)
     end
 end
+
 local function applyZone()
     local name=selectedZone()
     local p=S.presets[name]
@@ -3243,6 +3110,7 @@ local function startWorker(asDredge)
         S.dredge=false
     end
     S.running=true
+    S.simpleFailures=0
     S.diagEvent("START",asDredge and "AUTO DREDGE" or "AUTO FARM")
     S.token+=1
     local id=S.token
@@ -3283,80 +3151,29 @@ local function startWorker(asDredge)
             S.waiting=false
 
             if valid(id) then
-                -- A failed action may have returned before its ACTION_END.
                 S.traceCurrentAction=nil
                 S.traceActionStartedAt=nil
                 S.traceNextStallAt=nil
                 S.diagLastFailure=tostring(reason)
                 S.diagEvent("RECOVERY",tostring(reason).." | "..S.diagSnapshot())
-                -- A pending RemoteFunction cannot be canceled safely. More
-                -- retries only pile up when the server is unresponsive.
-                -- Likewise, a successful Pan with zero rewards and no
-                -- completion is not a position error; avoid the repeat loop.
-                local failureText=tostring(reason)
-                local unresponsive=S.dredge and (
-                    failureText:find("still in flight",1,true) or
-                    failureText:find("still pending",1,true) or
-                    failureText:find("server delivered no rewards",1,true))
-                if unresponsive then
-                    local message="Server response stalled: "..failureText
-                    S.diagEvent("DREDGE_SERVER_UNRESPONSIVE",
-                        message.." | "..S.diagSnapshot())
-                    S.liveDebugRecord("DREDGE_SERVER_UNRESPONSIVE",message)
-                    S.flushLiveDebug()
+                -- Keep one in-flight RPC protection: a timed-out request
+                -- cannot be cancelled, so never pile another onto it.
+                local why=tostring(reason)
+                if why:find("still in flight",1,true) or
+                    why:find("still pending",1,true) then
+                    S.diagEvent("RPC_PENDING_STOP",why)
                     stop()
-                    dredgeText("STOPPED: "..message)
-                    show("Dredge stopped: server unresponsive")
+                    show("Stopped: remote still pending")
                     break
                 end
-                if S.dredge and S.dredgeAt then
-                    local zoneName=S.dredgeAt
-                    if S.dredgeFailureZone~=zoneName then
-                        S.dredgeFailureZone=zoneName
-                        S.dredgeFailureCount=0
-                    end
-                    S.dredgeFailureCount=(S.dredgeFailureCount or 0)+1
-                    local attempts=S.dredgeFailureCount
-                    if attempts>=5 then
-                        outputWarning("dredge-zone-"..zoneName,
-                            "[GALAXIS DREDGE] Stopped after repeated failures:",
-                            zoneName,tostring(reason))
-                    else
-                        outputDebug("[GALAXIS DREDGE] Zone recovery",zoneName,
-                            attempts,tostring(reason))
-                    end
-                    if attempts>=5 then
-                        stop()
-                        dredgeText("Stopped after 5 failed cycles at "..zoneName..
-                            ": "..tostring(reason))
-                        break
-                    end
-                    -- Reposition locally, without another FastTravel request.
-                    -- Pan/shake failures return to water; Collect failures to dig.
-                    local info=tostring(reason):lower()
-                    local toWater=info:find("pan",1,true) or
-                        info:find("shake",1,true) or
-                        info:find("completion",1,true)
-                    local targetCF=toWater and S.water or S.dig
-                    if targetCF then
-                        local r=root()
-                        if r and (r.Position-targetCF.Position).Magnitude>8 then
-                            if not farmMove(targetCF,id) then
-                                stop()
-                                dredgeText("Stopped: recovery walking route blocked at "..zoneName)
-                                break
-                            end
-                        end
-                    end
-                    S.dredgeReadyAt=os.clock()+math.min(2.5,.65*attempts)
-                    show(string.format("Zone recovery %d/4: %s",
-                        attempts,zoneName))
-                    if not pause(math.min(2.5,.65*attempts),id) then break end
-                else
-                    show("Recovering in 0.25s: "..tostring(reason):sub(1,58))
-                    outputDebug("[GALAXIS HUB] Auto recovery:",reason)
-                    if not pause(CFG.recoveryDelay,id) then break end
+                S.simpleFailures=(S.simpleFailures or 0)+1
+                if S.simpleFailures>=5 then
+                    stop()
+                    show("Stopped after 5 consecutive failures: "..why:sub(1,50))
+                    break
                 end
+                show("Retrying: "..why:sub(1,70))
+                if not pause(.45,id) then break end
             end
         end
     end)
