@@ -1606,20 +1606,39 @@ local function returnToMappedStone(id)
             S.diagEvent("ABYSS_ROPE_EXIT_FAILED",tostring(escapeErr))
             return false,escapeErr
         end
-        -- Route points 7 and 6 are underground (Y=-257).
-        -- After climbing, start at point 5 on the upper path (Y=-114).
+        -- Rope can release the avatar anywhere along the upper path.
+        -- Never retrace the two underground points after climbing, and
+        -- do not force a climb back to checkpoint 5 after arriving closer
+        -- to an earlier upper checkpoint.
         local nodes=p.route or {}
-        local firstUpper=#nodes
-        for i=#nodes,1,-1 do
+        local rr=root()
+        if not rr then return false,"Character missing after Abyss rope" end
+        local nearestIndex,nearestDist=nil,math.huge
+        for i=1,#nodes do
             local cf=S.unpackCF(nodes[i])
             if cf and cf.Position.Y>-160 then
-                firstUpper=i
-                break
+                local dist=(rr.Position-cf.Position).Magnitude
+                if dist<nearestDist then
+                    nearestDist=dist
+                    nearestIndex=i
+                end
             end
         end
-        reverseStartIndex=firstUpper
-        S.diagEvent("ABYSS_UPPER_ROUTE",
-            "Skipping underground checkpoints; starting at "..tostring(firstUpper))
+        if not nearestIndex then
+            S.diagEvent("ABYSS_UPPER_ROUTE_MISSING",
+                "No upper checkpoints in saved Abyss route")
+            return false,"No upper checkpoints after Abyss rope"
+        end
+        reverseStartIndex=nearestIndex
+        S.diagEvent("ABYSS_UPPER_ROUTE",string.format(
+            "after rope pos=%.1f,%.1f,%.1f | nearest=%d/%d dist=%.1f",
+            rr.Position.X,rr.Position.Y,rr.Position.Z,
+            nearestIndex,#nodes,nearestDist))
+        if nearestDist>135 then
+            return false,string.format(
+                "Abyss rope exit %.1f studs from nearest upper route point %d",
+                nearestDist,nearestIndex)
+        end
     end
     local ok,err
     if oldZone=="Enchanted Ruins" and S.enchantedInboundRoute
@@ -1640,7 +1659,16 @@ local function returnToMappedStone(id)
         return false,err
     end
     -- Do not insist on walking into the stone's exact (often blocked) pivot.
-    return approachStone(stone,id,p.waypoint)
+    local atStone,stoneErr=approachStone(stone,id,p.waypoint)
+    if oldZone=="Abyssal Depth" then
+        local rr=root()
+        S.diagEvent("ABYSS_RETURN_TO_STONE",
+            string.format("success=%s waypoint=%s dist=%.1f err=%s",
+                tostring(atStone),tostring(p.waypoint),
+                rr and (rr.Position-stone.Position).Magnitude or -1,
+                tostring(stoneErr)))
+    end
+    return atStone,stoneErr
 end
 -- Resolve the actual deposit coordinates separately from saved waypoint
 -- checkpoints. An old/local override can incorrectly point a zone's dig
