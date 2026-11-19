@@ -1375,14 +1375,15 @@ local function approachStone(stone,id,stoneName)
 end
 -- Traverse optionally recorded coarse checkpoints (stone -> dig).
 -- Reversing the same list returns the avatar to the fast-travel stone.
-local function followRoutePoints(zoneName,id,reverse)
+local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local p=S.presets[zoneName]
     local nodes=p and p.route or {}
+    local startIndex=reverse and math.clamp(reverseStartIndex or #nodes,1,math.max(1,#nodes)) or 1
     S.diagEvent("WALK_ROUTE_START",string.format(
-        "zone=%s direction=%s checkpoints=%d",
-        tostring(zoneName),reverse and "to warp" or "to sand",#nodes))
-    for i=1,#nodes do
-        local index=reverse and (#nodes-i+1) or i
+        "zone=%s direction=%s checkpoints=%d start=%d",
+        tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
+    for i=1,(reverse and startIndex or #nodes) do
+        local index=reverse and (startIndex-i+1) or i
         local cf=unpackCF(nodes[index])
         if cf then
             local r=root()
@@ -1426,8 +1427,10 @@ local function climbAbyssRope(id)
     if not r then return false,"Character missing at Abyss rope" end
     local before=r.Position.Y
     local pos=interact.Position
-    -- Already above the rope exit: don't descend to press it again.
-    if before>pos.Y+35 then return true end
+    -- The first upper route checkpoint is around Y=-114. Do not
+    -- mistake the start of the rope animation for reaching its exit.
+    local upperY=pos.Y+90
+    if before>upperY then return true end
     S.dredgeCurrentWork="Climbing Abyssal Depth rope"
     S.diagEvent("ABYSS_ROPE_APPROACH",
         string.format("dist=%.1f y=%.1f", (r.Position-pos).Magnitude,before))
@@ -1453,18 +1456,18 @@ local function climbAbyssRope(id)
     end
     if not used then return false,"Could not activate rope prompt" end
     S.diagEvent("ABYSS_ROPE_TRIGGERED","Waiting for climb teleport")
-    local deadline=os.clock()+9
+    local deadline=os.clock()+15
     while valid(id) and os.clock()<deadline do
         r=root()
-        if r and (r.Position.Y>before+18 or
-            (r.Position-pos).Magnitude>35 and r.Position.Y>pos.Y+8) then
+        if r and r.Position.Y>upperY then
             S.diagEvent("ABYSS_ROPE_EXIT_OK",
-                string.format("height gained %.1f",r.Position.Y-before))
+                string.format("top reached at Y=%.1f (gained %.1f)",
+                    r.Position.Y,r.Position.Y-before))
             return true
         end
         task.wait(.12)
     end
-    return false,"Rope activated but exit movement not confirmed"
+    return false,"Rope triggered but upper ledge not reached"
 end
 
 local function returnToMappedStone(id)
@@ -1480,14 +1483,29 @@ local function returnToMappedStone(id)
     if (r.Position-stone.Position).Magnitude<=52
         and stableAt(stone,id,60,.35,1.5) then return true end
     S.dredgeCurrentWork="Walking back to "..tostring(p.waypoint).." stone"
+    local reverseStartIndex=nil
     if oldZone=="Abyssal Depth" then
         local escaped,escapeErr=climbAbyssRope(id)
         if not escaped then
             S.diagEvent("ABYSS_ROPE_EXIT_FAILED",tostring(escapeErr))
             return false,escapeErr
         end
+        -- Route points 7 and 6 are underground (Y=-257).
+        -- After climbing, start at point 5 on the upper path (Y=-114).
+        local nodes=p.route or {}
+        local firstUpper=#nodes
+        for i=#nodes,1,-1 do
+            local cf=unpackCF(nodes[i])
+            if cf and cf.Position.Y>-160 then
+                firstUpper=i
+                break
+            end
+        end
+        reverseStartIndex=firstUpper
+        S.diagEvent("ABYSS_UPPER_ROUTE",
+            "Skipping underground checkpoints; starting at "..tostring(firstUpper))
     end
-    local ok,err=followRoutePoints(oldZone,id,true)
+    local ok,err=followRoutePoints(oldZone,id,true,reverseStartIndex)
     if not ok then
         S.diagEvent("DREDGE_RETURN_ROUTE_FAILED",
             tostring(oldZone).." -> "..tostring(p.waypoint).." | "..tostring(err))
