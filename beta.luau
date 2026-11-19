@@ -1686,6 +1686,87 @@ local function describeDredgeTargets(group,remaining)
     end
     return #parts>0 and table.concat(parts,", ") or "None"
 end
+-- Abyssal flare maintenance. Runs only in Auto Dredge while stationed
+-- inside Abyssal Depth, never inside the fast Collect/Pan/Shake loops.
+local function nearbyFireflyFlare()
+    local r=root()
+    if not r then return false end
+    -- A placed flare is a world object, not a Tool in Character/Backpack.
+    -- Restrict to actual lit flare objects near the player.
+    for _,obj in ipairs(workspace:GetDescendants()) do
+        local name=obj.Name:lower()
+        if name:find("firefly",1,true) and name:find("flare",1,true) then
+            local pos
+            if obj:IsA("BasePart") then
+                pos=obj.Position
+            elseif obj:IsA("Model") then
+                pos=obj:GetPivot().Position
+            end
+            if pos and (pos-r.Position).Magnitude<=55 then
+                local light=obj:FindFirstChildWhichIsA("Light",true)
+                local particles=obj:FindFirstChildWhichIsA("ParticleEmitter",true)
+                if (light and light.Enabled) or (particles and particles.Enabled) then
+                    return true
+                end
+            end
+        end
+    end
+    return false
+end
+local function maintainAbyssFlare(id)
+    if not S.dredge or S.dredgeAt~="Abyssal Depth" or not valid(id) then return end
+    local now=os.clock()
+    if now<(S.abyssFlareNextCheck or 0) then return end
+    S.abyssFlareNextCheck=now+5
+    if nearbyFireflyFlare() then
+        S.abyssFlareLastSeen=now
+        return
+    end
+    -- A successful activation might take time to replicate. Never burn
+    -- several consumables merely because the model did not appear instantly.
+    if now<(S.abyssFlareNextAttempt or 0) then return end
+    local c=P.Character
+    local bag=P:FindFirstChildOfClass("Backpack")
+    local flare
+    for _,location in ipairs({c,bag}) do
+        if location then
+            for _,t in ipairs(location:GetChildren()) do
+                if t:IsA("Tool") and t.Name:lower():find("firefly flare",1,true) then
+                    flare=t
+                    break
+                end
+            end
+        end
+        if flare then break end
+    end
+    if not flare then
+        S.abyssFlareNextAttempt=now+15
+        S.diagEvent("ABYSS_FLARE_UNAVAILABLE",
+            "No equippable Firefly Flare Tool found in character/backpack")
+        return
+    end
+    local hum=c and c:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health<=0 then return end
+    -- Wait until between pans to temporarily equip the consumable.
+    local equippedPan=panTool() or panInBackpack()
+    S.diagEvent("ABYSS_FLARE_ATTEMPT","Using "..flare.Name)
+    if flare.Parent~=c then hum:EquipTool(flare) end
+    if not pause(.12,id) then return end
+    local ok,err=pcall(function() flare:Activate() end)
+    -- Re-equip pan immediately, even if flare activation failed.
+    if equippedPan and equippedPan.tool.Parent~=nil then
+        pcall(function() hum:EquipTool(equippedPan.tool) end)
+    end
+    if ok then
+        -- Conservative cooldown: the server controls the real flare lifetime.
+        S.abyssFlareNextAttempt=os.clock()+90
+        S.diagEvent("ABYSS_FLARE_ACTIVATED",
+            "Tool:Activate requested; waiting for world flare confirmation")
+    else
+        S.abyssFlareNextAttempt=os.clock()+15
+        S.diagEvent("ABYSS_FLARE_ERROR",tostring(err))
+    end
+end
 local function dredgeCycle(id)
     if not valid(id) or not S.dredge then return false end
     dredgeHealthWatch()
@@ -1955,6 +2036,9 @@ local function dredgeCycle(id)
     if os.clock()<(S.dredgeReadyAt or 0) then
         dredgeText("Settling "..targetZone.." deposit/water before collecting")
         return false
+    end
+    if targetZone=="Abyssal Depth" then
+        maintainAbyssFlare(id)
     end
     dredgeText(targetZone.." | cap "..tostring(S.dredgeTargetCap or "NONE")
         .." | "..tostring(S.dredgePlanText))
