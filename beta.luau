@@ -2374,6 +2374,21 @@ task.spawn(function()
     end
 end)
 
+-- Remove half-initialized GUIs left behind by earlier startup crashes.
+-- Also cleans old windows whose Close handler was never installed.
+local function clearOldBetaGui(container)
+    if not container then return end
+    for _,child in ipairs(container:GetChildren()) do
+        if child:IsA("ScreenGui") and child.Name=="GalaxisHubBeta" then
+            pcall(function() child:Destroy() end)
+        end
+    end
+end
+clearOldBetaGui(P:FindFirstChild("PlayerGui"))
+if type(gethui)=="function" then
+    local ok,container=pcall(gethui)
+    if ok then clearOldBetaGui(container) end
+end
 -- Minimal monochrome UI
 local G=Instance.new("ScreenGui")
 G.Name="GalaxisHubBeta";G.ResetOnSpawn=false;G.DisplayOrder=9999
@@ -2383,6 +2398,7 @@ if type(gethui)=="function" then
     if ok and v then parent=v end
 end
 G.Parent=parent
+S.Gui=G
 local BG=Color3.fromRGB(22,23,27)
 local PANEL=Color3.fromRGB(39,41,47)
 local FG=Color3.fromRGB(237,237,241)
@@ -2419,6 +2435,24 @@ local function button(txt,x,y,w,h,par)
 end
 local X=button("×",302,7,29,29,H)
 local Min=button("−",269,7,29,29,H)
+-- Install a working close button BEFORE any later UI setup can fail.
+-- When initialization finishes, S.Close performs normal cleanup.
+bind(X.MouseButton1Click,function()
+    if S.Close then
+        S.Close()
+        return
+    end
+    S.alive=false
+    S.running=false
+    S.token+=1
+    L.running=false
+    for _,connection in ipairs(S.links) do
+        pcall(function() connection:Disconnect() end)
+    end
+    pcall(function() G:Destroy() end)
+    if E.CoastalSafeFarm==S then E.CoastalSafeFarm=nil end
+    if E.StopUniversalLogger then pcall(E.StopUniversalLogger) end
+end)
 local Body=make("Frame",{Position=UDim2.fromOffset(0,43),Size=UDim2.new(1,0,1,-43),BackgroundTransparency=1},W)
 local function label(txt,x,y,w,h,size,color)
     return make("TextLabel",{
@@ -2512,6 +2546,21 @@ for i,name in ipairs(TAB_NAMES) do
     tabButtons[i]=button(name,4+(i-1)*56,36,53,32,Body)
     tabButtons[i].TextSize=8
 end
+-- Show tabs and make them clickable before constructing the complex
+-- diagnostic/reforge pages. A later setup error can no longer leave a
+-- blank window with invisible tabs.
+local function openTab(n)
+    for i,pageFrame in ipairs(TAB_PAGES) do
+        pageFrame.Visible=i==n
+        tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(70,74,83) or PANEL
+        tabButtons[i].TextColor3=i==n and FG or MUTED
+    end
+end
+for i,tab in ipairs(tabButtons) do
+    local index=i
+    bind(tab.MouseButton1Click,function() openTab(index) end)
+end
+openTab(1)
 local function relocate(widget,parent,x,y)
     widget.Parent=parent
     widget.Position=UDim2.fromOffset(x,y)
@@ -2757,21 +2806,6 @@ bind(S.liveCopyButton.MouseButton1Click,function()
     S.liveInfo.Text=copied and "Report copied to clipboard."
         or "Clipboard unavailable; TXT log is still being saved."
 end)
-
-local activeTab=1
-local function openTab(n)
-    activeTab=n
-    for i,p in ipairs(TAB_PAGES) do
-        p.Visible=i==n
-        tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(70,74,83) or PANEL
-        tabButtons[i].TextColor3=i==n and FG or MUTED
-    end
-end
-for i,tab in ipairs(tabButtons) do
-    local index=i
-    bind(tab.MouseButton1Click,function() openTab(index) end)
-end
-openTab(1)
 
 -- Quest and live zone diagnostics refresh independently of farming.
 task.spawn(function()
@@ -3632,7 +3666,7 @@ task.spawn(function()
         task.wait(.15)
     end
 end)
-bind(X.MouseButton1Click,close)
+-- X handler was bound at window creation so it works even during startup.
 -- C toggles the entire UI without stopping automation or logging.
 -- Ignore typing in chat/text inputs and other consumed keypresses.
 local interfaceHidden=false
