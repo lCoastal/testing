@@ -1278,6 +1278,22 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
     local deadline=os.clock()+math.clamp(distance/math.max(8,hum.WalkSpeed)*2.8+18,17,170)
     local segment=0
     local failures=0
+    local recoveryJumps=0
+    local lastJumpAt=-math.huge
+    local function jumpRecovery(reason)
+        local now=os.clock()
+        if now-lastJumpAt<1.25 or recoveryJumps>=6 then return end
+        if not valid(id) or hum.Health<=0 then return end
+        local state=hum:GetState()
+        if state==Enum.HumanoidStateType.Seated or
+            state==Enum.HumanoidStateType.Dead then return end
+        lastJumpAt=now
+        recoveryJumps+=1
+        hum.Jump=true
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        S.diagEvent("WALK_JUMP_RECOVERY",
+            string.format("attempt=%d reason=%s",recoveryJumps,tostring(reason)))
+    end
     local rayParams=RaycastParams.new()
     rayParams.FilterType=Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances={character}
@@ -1291,7 +1307,7 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
             return false,"Destination did not remain stable"
         end
         segment+=1
-        if segment>math.ceil(limit/115)+7 then return false,"Walking segments exceeded" end
+        if segment>math.ceil(limit/115)+15 then return false,"Walking segments exceeded" end
         local endpoint
         if distance<=160 then
             endpoint=cf.Position
@@ -1310,30 +1326,58 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
         end)
         if not ok or not path or path.Status~=Enum.PathStatus.Success then
             failures+=1
-            if failures>=2 then return false,"No walkable path to "..math.floor(distance).." studs" end
-            if not pause(.6,id) then return false,"Stopped" end
+            jumpRecovery("path computation failed")
+            S.diagEvent("WALK_REPATH",
+                string.format("no path | failure=%d/6 distance=%.1f",
+                    failures,distance))
+            if failures>=6 then
+                return false,"No walkable path after 6 attempts to "..math.floor(distance).." studs"
+            end
+            if not pause(.4+math.min(failures,4)*.2,id) then return false,"Stopped" end
         else
             local before=(r.Position-cf.Position).Magnitude
             local nodes=path:GetWaypoints()
-            if #nodes==0 then return false,"Path has no walking points" end
+            if #nodes==0 then
+                failures+=1
+                jumpRecovery("empty path")
+                if failures>=6 then return false,"Path has no walking points after retries" end
+                if not pause(.35,id) then return false,"Stopped" end
+                continue
+            end
             for _,node in ipairs(nodes) do
                 if not valid(id) or os.clock()>deadline then return false,"Walk interrupted/timed out" end
                 r=root()
                 if not r or hum.Health<=0 then return false,"Character lost" end
                 if (r.Position-node.Position).Magnitude>4.5 then
-                    if node.Action==Enum.PathWaypointAction.Jump then hum.Jump=true end
+                    if node.Action==Enum.PathWaypointAction.Jump then
+                        hum.Jump=true
+                    end
                     hum:MoveTo(node.Position)
                     local walkingDist=(r.Position-node.Position).Magnitude
                     local perNode=math.clamp(walkingDist/math.max(8,hum.WalkSpeed)*2.5+1.3,2.3,10)
                     local nodeDeadline=math.min(deadline,os.clock()+perNode)
+                    local bestNodeDistance=walkingDist
+                    local lastAdvance=os.clock()
                     while valid(id) and os.clock()<nodeDeadline do
                         r=root()
                         if not r or hum.Health<=0 then return false,"Character lost" end
-                        if (r.Position-node.Position).Magnitude<=4.8 then break end
+                        local remaining=(r.Position-node.Position).Magnitude
+                        if remaining<=4.8 then break end
+                        if remaining<bestNodeDistance-1.5 then
+                            bestNodeDistance=remaining
+                            lastAdvance=os.clock()
+                        elseif os.clock()-lastAdvance>1.1 then
+                            jumpRecovery("waypoint blocked")
+                            hum:MoveTo(node.Position)
+                            lastAdvance=os.clock()
+                        end
                         task.wait(.075)
                     end
                     if not r or (r.Position-node.Position).Magnitude>6 then
                         failures+=1
+                        jumpRecovery("waypoint timed out")
+                        S.diagEvent("WALK_REPATH",string.format(
+                            "blocked waypoint | failure=%d/6",failures))
                         break
                     end
                     S.recordEnchantedStep()
@@ -1342,8 +1386,18 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
             r=root()
             if not r then return false,"Character lost" end
             local after=(r.Position-cf.Position).Magnitude
-            if before-after>7 then failures=0 else failures+=1 end
-            if failures>=2 then return false,"Walking stalled / server corrected movement" end
+            if before-after>7 then
+                failures=0
+            else
+                failures+=1
+                jumpRecovery("insufficient route progress")
+                S.diagEvent("WALK_REPATH",string.format(
+                    "slow movement | failure=%d/6 remaining=%.1f",
+                    failures,after))
+            end
+            if failures>=6 then
+                return false,"Walking stalled after 6 recovery attempts / server corrected movement"
+            end
         end
     end
     return false,"Walk timed out"
@@ -2410,14 +2464,29 @@ local function dredgeCycle(id)
                     return false
                 end
             end
+            -- Ordinary pathfinding failures are recoverable. Re-plan from
+            -- the actual current position after a cooldown instead of
+            -- switching off Auto Dredge after a single blocked checkpoint.
+            -- Never stack FastTravel requests while an old attempt is being
+            -- checked; retries are separate bounded travel sessions.
+            local retryDelay=math.min(12+tries*8,45)
+            S.dredgeTravelRetryAt=os.clock()+retryDelay
+            S.dredgeWarped[targetZone]=nil
+            S.dredgeCurrentWork="Repathing to "..targetZone
+            S.dredgeNextWork="Retry route after "..retryDelay.."s"
+            S.diagEvent("DREDGE_WALK_RETRY",string.format(
+                "zone=%s attempt=%d reason=%s",
+                tostring(targetZone),tries,failure))
+            if tries<=5 then
+                dredgeText(string.format(
+                    "Route stalled: retrying %s in %ds (%d/5)",
+                    targetZone,retryDelay,tries))
+                return false
+            end
             S.dredgeCurrentWork="Route blocked: "..targetZone
             S.dredgeNextWork="Check saved stone route or move manually"
-            S.dredgeTravelRetryAt=os.clock()+35
-            dredgeText("Zone route blocked: "..targetZone..": "..failure)
-            -- Avoid uncontrolled warp loops: only stop on three rejected
-            -- attempts or immediately on a non-recoverable walking failure.
+            dredgeText("Route blocked after repeated attempts: "..targetZone..": "..failure)
             if stop then stop() end
-            dredgeText("Stopped: cannot confirm route to "..targetZone)
             return false
         end
         S.traceEnd("DREDGE_ZONE_TRAVEL","arrived at "..tostring(targetZone))
