@@ -1149,8 +1149,17 @@ local function refreshDredgeServerQuest(id)
         outputDebug("[GALAXIS DREDGE QUEST] CanStartQuest:",tostring(state.canStart),
             "status:",tostring(state.status),"step:",tostring(state.step))
     end
-    -- The server can supply current StepProgress even if the UI cache is stale.
-    if questMode(state)=="active" then
+    -- Do not invoke GetCurrentQuestStep alongside active Collect/Pan RPCs
+    -- when the client already has StepProgress. This extra server query
+    -- repeatedly timed out in the same windows as Collect/Sell stalls.
+    -- Fallback is still available when the local quest cache is missing.
+    local localQuest=getQuest()
+    local needsServerProgress=not localQuest
+        or type(localQuest.StepProgress)~="table"
+    local busyMining=S.traceCurrentAction=="COLLECT_TO_CAPACITY"
+        or S.traceCurrentAction=="PAN_INVOKE"
+        or S.traceCurrentAction=="SHAKE_LOOP"
+    if questMode(state)=="active" and needsServerProgress and not busyMining then
         local qr=questsRemote()
         local fn=qr and qr:FindFirstChild("GetCurrentQuestStep")
         if fn and fn:IsA("RemoteFunction") then
@@ -1160,7 +1169,7 @@ local function refreshDredgeServerQuest(id)
             if ok and type(result)=="table" and type(result.StepProgress)=="table"
               and valid(id) then S.dredgeServerProgress=result end
         end
-    else
+    elseif questMode(state)~="active" then
         S.dredgeServerProgress=nil
     end
 end
@@ -1172,7 +1181,12 @@ task.spawn(function()
             S.dredgePollBusy=true
             S.dredgePollStartedAt=os.clock()
             S.dredgePollAttempts=(S.dredgePollAttempts or 0)+1
-            S.dredgeNextServerPoll=os.clock()+5
+            -- While actively farming, keep the authoritative quest mode
+            -- checked but avoid hammering the server every five seconds.
+            S.dredgeNextServerPoll=os.clock()+
+                ((S.traceCurrentAction=="COLLECT_TO_CAPACITY"
+                    or S.traceCurrentAction=="PAN_INVOKE"
+                    or S.traceCurrentAction=="SHAKE_LOOP") and 10 or 5)
             local current=S.token
             local ok,err=pcall(refreshDredgeServerQuest,current)
             if not ok then
