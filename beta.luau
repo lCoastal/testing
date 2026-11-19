@@ -416,6 +416,121 @@ function S.diagSnapshot()
         digIdle,collectPending,tostring(S.diagLastCollectMs or "N/A"),
         tostring(S.diagLastCollectResult or "N/A"))
 end
+-- Live Debug uses periodic snapshots independent of the action trace.
+-- Writes are buffered, bounded without appendfile, and never block a pan call.
+S.liveDebugEnabled=true
+S.liveDebugFile="GalaxisHub_LiveDebug_"..os.date("%Y%m%d_%H%M%S")..".txt"
+local liveSuffix=1
+while fileExists(S.liveDebugFile) do
+    liveSuffix+=1
+    S.liveDebugFile="GalaxisHub_LiveDebug_"..os.date("%Y%m%d_%H%M%S").."_"..liveSuffix..".txt"
+end
+S.liveDebugHeader="GALAXIS HUB BETA | LIVE DEBUG | "..os.date("%Y-%m-%d %H:%M:%S")..
+    "\nSnapshot interval: 2s while farming, 8s while idle; buffered file writes\n"
+S.liveDebugQueue={}
+S.liveDebugRolling={}
+S.liveDebugRecent={}
+S.liveDebugError=nil
+S.liveDebugReady=false
+S.liveDebugWriting=false
+S.liveDebugFallback=false
+S.liveDebugLastState=nil
+S.liveDebugLastChangeAt=os.clock()
+S.liveDebugLastStallAt=0
+if type(writefile)=="function" then
+    local ok,err=pcall(writefile,S.liveDebugFile,S.liveDebugHeader)
+    S.liveDebugReady=ok
+    if not ok then S.liveDebugError=tostring(err) end
+else
+    S.liveDebugError="writefile unavailable"
+end
+function S.liveDebugRecord(kind,detail)
+    if not S.liveDebugEnabled then return end
+    local flat=tostring(detail or ""):gsub("[\r\n]"," / ")
+    local line=os.date("%Y-%m-%d %H:%M:%S").." | "..tostring(kind).." | "..flat.."\n"
+    local queue=S.liveDebugQueue
+    queue[#queue+1]=line
+    if #queue>400 then table.remove(queue,1) end
+    local recent=S.liveDebugRecent
+    recent[#recent+1]=line
+    if #recent>40 then table.remove(recent,1) end
+end
+function S.flushLiveDebug()
+    if S.liveDebugWriting or not S.liveDebugReady or #S.liveDebugQueue==0 then return end
+    S.liveDebugWriting=true
+    local batch=S.liveDebugQueue
+    S.liveDebugQueue={}
+    local rolling=S.liveDebugRolling
+    for _,line in ipairs(batch) do
+        rolling[#rolling+1]=line
+        if #rolling>900 then table.remove(rolling,1) end
+    end
+    local ok,err=false,nil
+    if type(appendfile)=="function" and not S.liveDebugFallback then
+        ok,err=pcall(appendfile,S.liveDebugFile,table.concat(batch))
+        if not ok then S.liveDebugFallback=true end
+    end
+    if not ok and type(writefile)=="function" then
+        ok,err=pcall(writefile,S.liveDebugFile,S.liveDebugHeader..table.concat(rolling))
+    end
+    if not ok then
+        S.liveDebugError=tostring(err)
+        for _,line in ipairs(batch) do
+            S.liveDebugQueue[#S.liveDebugQueue+1]=line
+        end
+        while #S.liveDebugQueue>400 do table.remove(S.liveDebugQueue,1) end
+    else
+        S.liveDebugError=nil
+    end
+    S.liveDebugWriting=false
+end
+function S.liveDebugDetails()
+    local action=S.traceCurrentAction or "none"
+    local age=S.traceActionStartedAt and (os.clock()-S.traceActionStartedAt) or 0
+    return "selected="..tostring(ZONE_NAMES[S.selectedZone] or "none")..
+        " | activeAction="..tostring(action)..
+        " age="..string.format("%.2fs",age)..
+        " | objective="..tostring(S.dredgeCurrentWork or "none")..
+        " | next="..tostring(S.dredgeNextWork or "none")..
+        " | cap="..tostring(S.dredgeAppliedCap or "unset")..
+        " | lastError="..tostring(S.diagLastFailure or "none")..
+        " | "..S.diagSnapshot()
+end
+S.liveDebugRecord("START","Live debug initialized")
+task.spawn(function()
+    local lastSample=0
+    local lastFlush=0
+    while S.alive do
+        local now=os.clock()
+        local state=tostring(S.running).."|"..tostring(S.dredge).."|"..
+            tostring(S.diagPhase).."|"..tostring(S.traceCurrentAction).."|"..
+            tostring(S.dredgeAt or S.activeZone).."|"..tostring(S.dredgeCurrentWork)
+        if state~=S.liveDebugLastState then
+            S.liveDebugLastState=state
+            S.liveDebugLastChangeAt=now
+            S.liveDebugRecord("STATE_CHANGE",S.liveDebugDetails())
+        end
+        if now-lastSample>=(S.running and 2 or 8) then
+            lastSample=now
+            S.liveDebugRecord("SNAPSHOT",S.liveDebugDetails())
+        end
+        -- Detect a silent idle state even without an ACTION_START event.
+        if S.running and now-S.liveDebugLastChangeAt>=6
+            and now-S.liveDebugLastStallAt>=6 then
+            S.liveDebugLastStallAt=now
+            S.liveDebugRecord("POSSIBLE_STALL",
+                "State unchanged for "..string.format("%.1fs",now-S.liveDebugLastChangeAt)..
+                " | "..S.liveDebugDetails())
+        end
+        if now-lastFlush>=1.5 then
+            lastFlush=now
+            S.flushLiveDebug()
+        end
+        task.wait(.5)
+    end
+    S.flushLiveDebug()
+end)
+
 function S.diagReport()
     local lines={
         "GALAXIS HUB DEBUG REPORT",
@@ -424,6 +539,8 @@ function S.diagReport()
         "CURRENT: "..S.diagSnapshot(),
         "Last failure: "..tostring(S.diagLastFailure or "None"),
         "ACTION TRACE FILE: "..tostring(S.actionTraceFile),
+        "LIVE DEBUG FILE: "..tostring(S.liveDebugFile),
+        "Live debug error: "..tostring(S.liveDebugError or "None"),
         "Action trace enabled: "..tostring(S.actionTraceEnabled),
         "Action trace file error: "..tostring(S.actionTraceError or "None"),
         "Anti-AFK: "..tostring(S.antiAfk),
@@ -2022,13 +2139,13 @@ local function page()
         Visible=false
     },Body)
 end
-local farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage=page(),page(),page(),page(),page()
-local TAB_NAMES={"FARM","DREDGE","ZONE DIAG.","TREASURE","REFORGE"}
-local TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage}
+local farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage=page(),page(),page(),page(),page(),page()
+local TAB_NAMES={"FARM","DREDGE","ZONE","TREASURE","REFORGE","LIVE DEBUG"}
+local TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage}
 local tabButtons={}
 for i,name in ipairs(TAB_NAMES) do
-    tabButtons[i]=button(name,5+(i-1)*66,36,62,32,Body)
-    tabButtons[i].TextSize=9
+    tabButtons[i]=button(name,4+(i-1)*56,36,53,32,Body)
+    tabButtons[i].TextSize=8
 end
 local function relocate(widget,parent,x,y)
     widget.Parent=parent
@@ -2229,6 +2346,31 @@ bind(S.reforgeButton.MouseButton1Click,function()
     end)
 end)
 
+-- Live Debug: one glance at current action, zone, fill and stalled state.
+S.liveTitle=label("LIVE DEBUG  /  AUTO-SAVING",14,9,312,26,12,FG)
+relocate(S.liveTitle,livePage,14,9)
+S.liveStatus=label("Starting diagnostics...",14,42,312,222,11,FG)
+relocate(S.liveStatus,livePage,14,42)
+S.liveStatus.TextWrapped=true
+S.liveStatus.TextYAlignment=Enum.TextYAlignment.Top
+S.liveFileLabel=label("TXT: "..S.liveDebugFile,14,269,312,34,10,MUTED)
+relocate(S.liveFileLabel,livePage,14,269)
+S.liveFileLabel.TextWrapped=true
+S.liveCopyButton=button("COPY LIVE DEBUG REPORT",14,314,312,36,livePage)
+S.liveInfo=label("Log writes automatically. Copy report for support.",14,354,312,35,10,MUTED)
+relocate(S.liveInfo,livePage,14,354)
+S.liveInfo.TextWrapped=true
+bind(S.liveCopyButton.MouseButton1Click,function()
+    S.liveDebugRecord("MANUAL_EXPORT",S.liveDebugDetails())
+    S.flushLiveDebug()
+    local report=S.diagReport().."\n--- LIVE DEBUG RECENT ---\n"..
+        table.concat(S.liveDebugRecent)
+    local copied=false
+    if type(setclipboard)=="function" then copied=pcall(setclipboard,report) end
+    S.liveInfo.Text=copied and "Report copied to clipboard."
+        or "Clipboard unavailable; TXT log is still being saved."
+end)
+
 local activeTab=1
 local function openTab(n)
     activeTab=n
@@ -2247,6 +2389,37 @@ openTab(1)
 -- Quest and live zone diagnostics refresh independently of farming.
 task.spawn(function()
     while S.alive do
+        if livePage.Visible then
+            local action=S.traceCurrentAction or "Idle / no active action"
+            local age=S.traceActionStartedAt and
+                string.format("%.1fs",os.clock()-S.traceActionStartedAt) or "N/A"
+            local pan=panTool()
+            local pos=root()
+            local hp=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+            local function d(cf)
+                return pos and cf and string.format("%.1f studs",
+                    (pos.Position-cf.Position).Magnitude) or "N/A"
+            end
+            local idleFor=os.clock()-(S.liveDebugLastChangeAt or os.clock())
+            S.liveStatus.Text=
+                "Running: "..tostring(S.running).." | Mode: "..(S.dredge and "DREDGE" or "FARM")..
+                "\nPhase: "..tostring(S.diagPhase or "Idle")..
+                "\nAction: "..action.." ("..age..")"..
+                "\nSelected: "..tostring(selectedZone())..
+                "\nLoaded: "..tostring(S.dredgeAt or S.activeZone or "none")..
+                "\nPan: "..tostring(pan and pan.tool.Name or "NOT EQUIPPED")..
+                "\nFill: "..tostring(pan and fill(pan) or "N/A")..
+                    " / "..tostring(capacity() or "N/A")..
+                "\nDistance: dig "..d(S.dig).." | water "..d(S.water)..
+                "\nHP: "..tostring(hp and math.floor(hp.Health) or "N/A")..
+                "\nLast Collect: "..tostring(S.diagLastCollectMs or "N/A").." ms"..
+                "\nLuck cap: "..tostring(S.dredgeAppliedCap or "N/A")..
+                "\nState unchanged: "..string.format("%.1fs",idleFor)..
+                "\nLast failure: "..tostring(S.diagLastFailure or "None"):sub(1,85)
+            S.liveInfo.Text=S.liveDebugError and
+                ("FILE ERROR: "..S.liveDebugError):sub(1,125) or
+                "Saving snapshots every 2s active / 8s idle"
+        end
         if reforgePage.Visible then
             local item=heldReforgeItem()
             S.reforgeEquipped.Text="Held item: "..(item and item.Name or "none / not reforgeable")
@@ -2425,6 +2598,8 @@ local function close()
     stop()
     stopLogger()
     S.traceAction("TRACE_CLOSE","Hub closing; remaining trace will flush")
+    S.liveDebugRecord("CLOSE",S.liveDebugDetails())
+    S.flushLiveDebug()
     S.alive=false
     for _,c in ipairs(S.links) do pcall(function() c:Disconnect() end) end
     G:Destroy()
