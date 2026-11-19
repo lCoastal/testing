@@ -889,7 +889,10 @@ local function eligible(z,tier)
         or not S.unpackCF(preset.water) or not waypointIndex[preset.waypoint or ""] then return false end
     if base=="The Void" or base=="Haunted Creek" or base=="North Pole"
         or base=="Seashell Beach" or base:find("Tomb Vein",1,true) then return false end
-    if base=="Magma Furnace" then return false end -- Cannot verify fire protection
+    -- Magma Furnace is a permanent deposit. It has its own saved route
+    -- and must not inherit Infernal Heart's timed-zone eligibility.
+    -- Its heat exposure is handled by the risky-zone health watcher.
+    if base=="Magma Furnace" then return true end
     if base=="Fungal Marsh" then return tier>=2 and S.dredgePurifying end
     if base=="Rotwood Swamp" then return tier>=3 and S.dredgeRisk end
     if base=="Timelocked Sanctuary" or base=="Infernal Heart" then return tier>=4 and openNow(base) end
@@ -2256,7 +2259,8 @@ local function dredgeCycle(id)
         S.dredgeReadyAt=os.clock()+1.2
         S.dredgeFailureCount=0
         S.dredgeFailureZone=targetZone
-        S.dredgeRiskZone=(targetZone=="Rotwood Swamp" or targetZone=="Abyssal Depth")
+        S.dredgeRiskZone=(targetZone=="Rotwood Swamp"
+            or targetZone=="Abyssal Depth" or targetZone=="Magma Furnace")
         if S.dredgeCapLockedZone~=targetZone then
             S.dredgeCapLockedZone=nil
             S.dredgeCapLockedKey=nil
