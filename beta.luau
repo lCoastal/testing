@@ -2070,12 +2070,42 @@ local function dredgeCycle(id)
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
         if not plan or not plan.stops[1] then
-            S.dredgeCurrentWork="No accessible safe deposit"
-            S.dredgeNextWork="Wait for equipment, coordinates or opening"
-            escapeZone()
-            dredgeText("Waiting: missing safe zones / ring / timed opening")
+            -- Being physically inside a deposit and owning a pan do not
+            -- make a quest mineral obtainable there. Explain exactly which
+            -- remaining objectives have no eligible drop location.
+            local eligibleDrops={}
+            local eligibleCount=0
+            for _,candidate in ipairs(ALL_ZONES) do
+                if eligible(candidate,5) then
+                    eligibleCount+=1
+                    for _,drop in ipairs(poolFor(candidate)) do
+                        eligibleDrops[drop[1]]=true
+                    end
+                end
+            end
+            local missing={}
+            for _,wanted in ipairs(wants) do
+                if not eligibleDrops[wanted.m] then
+                    missing[#missing+1]=wanted.m.." ("..tostring(wanted.n).." left)"
+                end
+            end
+            S.dredgeCurrentWork="No eligible deposit for: "..
+                (#missing>0 and table.concat(missing,", ") or "current objectives")
+            S.dredgeNextWork="Eligible zones: "..tostring(eligibleCount)..
+                " | inspect quest objective/deposit permissions"
+            local explanation="Remaining objectives unavailable: "..
+                (#missing>0 and table.concat(missing,", ") or "route optimizer could not form a plan")
+            if S.dredgeLastNoPlanText~=explanation then
+                S.dredgeLastNoPlanText=explanation
+                S.diagEvent("DREDGE_NO_ELIGIBLE_PLAN",
+                    explanation.." | eligibleZones="..tostring(eligibleCount))
+            end
+            dredgeText(explanation)
+            -- No blind movement: remain where the player is and replan on
+            -- the next quest refresh or time-gated zone opening.
             return false
         end
+        S.dredgeLastNoPlanText=nil
         local choice=plan.stops[1]
         -- Unlock the cap only when the active mineral set changes or
         -- objectives are completed. This permits NONE -> 100 in the same
@@ -3738,6 +3768,17 @@ local function startWorker(asDredge)
                 continue
             end
             local r=panTool() or S.panInBackpack()
+            -- Dredge's planner and travel logic must keep running even if
+            -- the pan is temporarily unequipped (e.g. during a warp or NPC
+            -- interaction). A pan-less planning interval is not a farm error.
+            if S.dredge and not r then
+                S.diagEvent("DREDGE_PAN_UNAVAILABLE",
+                    "No compatible equipped/backpack pan; continuing quest planning")
+                local ok,err=pcall(dredgeCycle,id)
+                if not ok then S.diagEvent("DREDGE_PLAN_ERROR",tostring(err)) end
+                if not pause(1,id) then break end
+                continue
+            end
             if r then requirePanEquipped(r,id) end
             local target=S.capacity()
             local reason
