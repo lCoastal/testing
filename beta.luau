@@ -2958,6 +2958,12 @@ stop=function()
     S.traceCurrentAction=nil
     S.traceActionStartedAt=nil
     local hadDredge=S.dredge
+    -- Remember where we physically stopped. The return path to the Dredge
+    -- Master must still know its departure zone after OFF -> ON.
+    if hadDredge and S.dredgeAt then
+        S.dredgeResumeZone=S.dredgeAt
+        S.diagEvent("DREDGE_RESUME_SAVED",S.dredgeResumeZone)
+    end
     S.dredge=false;S.dredgeCurrent=nil;S.dredgeGroup=nil
     S.dredgeAt=nil;S.dredgeRiskZone=false
     if hadDredge and S.dredgeAppliedCap~="NONE" then
@@ -3484,8 +3490,14 @@ local function startWorker(asDredge)
         if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
-        S.enchantedRecording=nil;S.enchantedInboundRoute=nil
-        S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
+        S.enchantedRecording=nil
+        -- Preserve the recorded Enchanted entry path across OFF -> ON.
+        -- Restarting without that path previously broke the return route.
+        S.dredgeAt=S.dredgeResumeZone
+        S.dredgeAppliedCap="UNSET"
+        if S.dredgeAt then
+            S.diagEvent("DREDGE_RESUME_ZONE",S.dredgeAt)
+        end
         S.dredgeCapLockedZone=nil;S.dredgeCapLockedKey=nil
         S.dredgeTurnAttempts=0;S.dredgeTurnRetryAt=nil
         S.dredgeCapLastAt=-math.huge
@@ -3534,6 +3546,20 @@ local function startWorker(asDredge)
 
     task.spawn(function()
         while valid(id) do
+            -- Quest turn-in/start requires no equipped pan. Previously a
+            -- missing pan blocked the whole worker before it could walk
+            -- back to the Dredge Master after re-enabling.
+            local questAction=S.dredge and S.dredgeServerStatus
+                and (questMode(S.dredgeServerStatus)=="turnin"
+                    or questMode(S.dredgeServerStatus)=="available")
+            if questAction then
+                local ok,err=pcall(dredgeCycle,id)
+                if not ok then
+                    S.diagEvent("DREDGE_TRANSITION_ERROR",tostring(err))
+                end
+                if not pause(.3,id) then break end
+                continue
+            end
             local r=panTool() or panInBackpack()
             if r then requirePanEquipped(r,id) end
             local target=capacity()
