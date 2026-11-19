@@ -27,25 +27,26 @@ if E.CoastalSafeFarm and E.CoastalSafeFarm.Close then
 end
 if E.StopUniversalLogger then pcall(E.StopUniversalLogger) end
 
--- New timestamped .txt file on EVERY launch; never overwrite previous runs.
-local BASE=os.date("%H-%M-%S")
-local FILE=BASE..".txt"
+-- One persistent mineral log across launches; rotate only on user request.
+local ACTIVE_LOG_POINTER="GalaxisHub_MineralLogActive.txt"
+local DEFAULT_LOG_FILE="GalaxisHub_Minerals.txt"
+local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
 local function fileExists(path)
     if type(isfile)=="function" then
         local ok,exists=pcall(isfile,path)
         if ok then return exists end
     end
-    if type(readfile)=="function" then
-        return pcall(readfile,path)
-    end
+    if type(readfile)=="function" then return pcall(readfile,path) end
     return false
 end
-local suffix=1
-while fileExists(FILE) do
-    suffix+=1
-    FILE=BASE.."_"..suffix..".txt"
+local FILE=DEFAULT_LOG_FILE
+if type(readfile)=="function" and fileExists(ACTIVE_LOG_POINTER) then
+    local ok,saved=pcall(readfile,ACTIVE_LOG_POINTER)
+    if ok and type(saved)=="string" then
+        saved=saved:match("^%s*(.-)%s*$")
+        if saved:match("^[%w_%-%.]+%.txt$") and #saved<=120 then FILE=saved end
+    end
 end
-local HEADER="Time\tPan\tMineral\tMutation\tWeight (kg)\tItemID\tLuck\tSize Boost\tModifier Boost\tCapacity\tZone\n"
 local CFG={dig=.025,shake=.028,shakeGap=.008,teleport=.06,panRetry=.035,rewardGap=.3,logGap=.5,timeout=3,panTimeout=12,collectTimeout=6,digStall=2.8,recoveryDelay=.25,maxDig=600,maxShake=180}
 -- Turbo timings are optional; regular timings remain available for comparison.
 local TURBO={dig=.012,shake=.015,shakeGap=.005,teleport=.04,panRetry=.018}
@@ -53,7 +54,7 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,s
     antiAfk=true,earlyTP=false,turbo=true,recentTimes={},totalCycleTime=0,
     waiting=false,completed=false,rewards=0,lastReward=0,seen={},links={},completion=nil,
     sellQueue={},lastQueuedCycle=0,panFirstRejects=0,panReadyDelay=0}
-local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false}
+local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false,logFile=FILE}
 S.DIAG_LOG={}
 -- TEMPORARY action trace. File I/O is batched in its own worker.
 S.actionTraceEnabled=true
@@ -1960,11 +1961,12 @@ local function flush()
     local batch=L.unsaved
     L.unsaved={}
     local chunk=table.concat(batch)
+    local destination=FILE
     local ok,err=pcall(function()
         if type(appendfile)=="function" then
-            appendfile(FILE,chunk)
+            appendfile(destination,chunk)
         elseif type(readfile)=="function" and type(writefile)=="function" then
-            writefile(FILE,readfile(FILE)..chunk)
+            writefile(destination,readfile(destination)..chunk)
         else
             error("Executor lacks appendfile/readfile")
         end
@@ -2015,12 +2017,74 @@ local function logItem(item)
     }
     L.lastItem=os.clock()
 end
--- Start a new session file now, including the TSV column names.
-if type(writefile)=="function" then
-    local ok,err=pcall(writefile,FILE,HEADER)
-    if not ok then L.error=tostring(err) end
-else
-    L.error="Executor lacks writefile"
+-- Read the existing log once at startup to resume pan numbering.
+local function logStats(raw)
+    local maxPan,count=0,0
+    for line in raw:gmatch("[^\r\n]+") do
+        local n=tonumber(line:match("^[^\t]*\t([^\t]+)\t"))
+        if n then
+            maxPan=math.max(maxPan,n)
+            count+=1
+        end
+    end
+    return maxPan,count
+end
+local function initializeMineralFile()
+    if type(writefile)~="function" then
+        L.error="writefile unavailable"
+        return
+    end
+    if fileExists(FILE) then
+        if type(readfile)~="function" then
+            L.error="readfile required to resume an existing mineral log"
+            return
+        end
+        local ok,raw=pcall(readfile,FILE)
+        if not ok then L.error="Cannot read existing log: "..tostring(raw);return end
+        if raw~="" then
+            if raw:sub(1,#HEADER)~=HEADER then
+                L.error="Existing log format differs; cannot safely append"
+                return
+            end
+            L.pan,L.minerals=logStats(raw)
+        else
+            local written,err=pcall(writefile,FILE,HEADER)
+            if not written then L.error=tostring(err) end
+        end
+    else
+        local ok,err=pcall(writefile,FILE,HEADER)
+        if not ok then L.error=tostring(err) end
+    end
+end
+initializeMineralFile()
+local function switchToNewMineralLog()
+    if not L.running then return false,"Logger stopped" end
+    if L.writing then return false,"Write in progress; try again" end
+    finishBatch()
+    if L.writing or #L.unsaved>0 or L.error then
+        return false,L.error or "Old log couldn't be flushed"
+    end
+    if type(writefile)~="function" then return false,"writefile unavailable" end
+    local base="GalaxisHub_Minerals_"..os.date("%Y%m%d_%H%M%S")
+    local candidate=base..".txt"
+    local suffix=1
+    while fileExists(candidate) do
+        suffix+=1
+        candidate=base.."_"..suffix..".txt"
+    end
+    local ok,err=pcall(writefile,candidate,HEADER)
+    if not ok then return false,tostring(err) end
+    local saved,saveErr=pcall(writefile,ACTIVE_LOG_POINTER,candidate)
+    if not saved then
+        return false,"Failed to save current log filename: "..tostring(saveErr)
+    end
+    FILE=candidate
+    L.logFile=FILE
+    L.pan=0
+    L.minerals=0
+    L.error=nil
+    S.diagEvent("MINERAL_LOG_NEW_FILE",FILE)
+    return true,FILE
 end
 local backpack=P:WaitForChild("BackpackTwo")
 for _,item in ipairs(backpack:GetChildren()) do L.seen[item]=true end
@@ -2223,7 +2287,20 @@ S.doubleShakeButton=button("DOUBLE SHAKE: ON",177,253,149,36,farmPage)
 relocate(S.farmInstructions,farmPage,14,295)
 relocate(S.antiAfkButton,farmPage,14,341)
 relocate(S.actionTraceButton,farmPage,14,383)
-S.actionTraceButton.Size=UDim2.fromOffset(312,25)
+S.actionTraceButton.Size=UDim2.fromOffset(149,25)
+S.newMineralLogButton=button("NEW LOG FILE",177,383,149,25,farmPage)
+S.newMineralLogButton.TextSize=11
+bind(S.newMineralLogButton.MouseButton1Click,function()
+    if S.logRotateBusy then return end
+    S.logRotateBusy=true
+    local ok,fileOrError=switchToNewMineralLog()
+    if ok then
+        show("Mineral log changed: "..fileOrError)
+    else
+        show("New log FAILED: "..tostring(fileOrError):sub(1,95))
+    end
+    S.logRotateBusy=false
+end)
 
 -- Auto Dredge: objective readout, safety switches, and 100%-quality model.
 relocate(dredgeButton,dredgePage,14,20)
@@ -2413,8 +2490,11 @@ S.liveFileLabel=label("TXT: "..S.liveDebugFile,14,269,312,34,10,MUTED)
 relocate(S.liveFileLabel,livePage,14,269)
 S.liveFileLabel.TextWrapped=true
 S.liveCopyButton=button("COPY LIVE DEBUG REPORT",14,314,312,36,livePage)
-S.liveInfo=label("Log writes automatically. Copy report for support.",14,354,312,35,10,MUTED)
-relocate(S.liveInfo,livePage,14,354)
+S.mineralFileLabel=label("MINERAL LOG: "..FILE,14,352,312,30,10,MUTED)
+relocate(S.mineralFileLabel,livePage,14,352)
+S.mineralFileLabel.TextWrapped=true
+S.liveInfo=label("Log writes automatically. Copy report for support.",14,385,312,25,10,MUTED)
+relocate(S.liveInfo,livePage,14,385)
 S.liveInfo.TextWrapped=true
 bind(S.liveCopyButton.MouseButton1Click,function()
     S.liveDebugRecord("MANUAL_EXPORT",S.liveDebugDetails())
@@ -2446,6 +2526,7 @@ openTab(1)
 task.spawn(function()
     while S.alive do
         if livePage.Visible then
+            S.mineralFileLabel.Text="MINERAL LOG: "..FILE
             local action=S.traceCurrentAction or "Idle / no active action"
             local age=S.traceActionStartedAt and
                 string.format("%.1fs",os.clock()-S.traceActionStartedAt) or "N/A"
