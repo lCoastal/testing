@@ -1157,6 +1157,18 @@ local function stableAt(cf,id,radius,hold,maxWait)
     end
     return false
 end
+-- Record the actual walking path into Enchanted Ruins, not just the
+-- coarse user-defined preset nodes. Only enabled during inbound travel.
+local function recordEnchantedStep()
+    local path=S.enchantedRecording
+    if not path then return end
+    local r=root()
+    if not r then return end
+    local last=path[#path]
+    if (not last or (r.Position-last).Magnitude>=4) and #path<500 then
+        path[#path+1]=r.Position
+    end
+end
 local function walkRoute(cf,id,maxDistance,checkpoint)
     local r=root()
     local character=P.Character
@@ -1230,6 +1242,7 @@ local function walkRoute(cf,id,maxDistance,checkpoint)
                         failures+=1
                         break
                     end
+                    recordEnchantedStep()
                 end
             end
             r=root()
@@ -1470,6 +1483,38 @@ local function climbAbyssRope(id)
     return false,"Rope triggered but upper ledge not reached"
 end
 
+-- Return along the actual successful inbound steps, in reverse order.
+-- Frequent breadcrumbs make steep Enchanted Ruins ramps reversible without
+-- asking the navigator to invent a new route around the cliff.
+local function returnViaEnchantedPath(id)
+    local steps=S.enchantedInboundRoute
+    if not steps or #steps<3 then return false,"No recorded inbound route" end
+    S.diagEvent("ENCHANTED_REVERSE_START",
+        string.format("recorded=%d points",#steps))
+    S.dredgeCurrentWork="Reversing actual Enchanted Ruins entry path"
+    for i=#steps,1,-1 do
+        if not valid(id) then return false,"Interrupted" end
+        local pos=steps[i]
+        local r=root()
+        if not r then return false,"Character lost" end
+        if (r.Position-pos).Magnitude>5.5 then
+            local ok,err=walkRoute(CFrame.new(pos),id,1800,true)
+            if not ok then
+                S.diagEvent("ENCHANTED_REVERSE_FAILED",
+                    string.format("point=%d/%d: %s",i,#steps,tostring(err)))
+                return false,"Reversing entry path failed at "..i..
+                    "/"..#steps..": "..tostring(err)
+            end
+        end
+        if i%20==0 or i==1 then
+            S.diagEvent("ENCHANTED_REVERSE_PROGRESS",
+                string.format("%d/%d remaining",i-1,#steps))
+        end
+    end
+    S.diagEvent("ENCHANTED_REVERSE_DONE","Reached recorded entry point")
+    return true
+end
+
 local function returnToMappedStone(id)
     local oldZone=S.dredgeAt
     if not oldZone then return true end
@@ -1505,7 +1550,19 @@ local function returnToMappedStone(id)
         S.diagEvent("ABYSS_UPPER_ROUTE",
             "Skipping underground checkpoints; starting at "..tostring(firstUpper))
     end
-    local ok,err=followRoutePoints(oldZone,id,true,reverseStartIndex)
+    local ok,err
+    if oldZone=="Enchanted Ruins" and S.enchantedInboundRoute
+        and #S.enchantedInboundRoute>=3 then
+        ok,err=returnViaEnchantedPath(id)
+    else
+        -- If script was started inside the Ruins or the prior route was
+        -- never recorded, retain the preset reverse-route fallback.
+        if oldZone=="Enchanted Ruins" then
+            S.diagEvent("ENCHANTED_REVERSE_FALLBACK",
+                "No complete recorded inbound route; using saved checkpoints")
+        end
+        ok,err=followRoutePoints(oldZone,id,true,reverseStartIndex)
+    end
     if not ok then
         S.diagEvent("DREDGE_RETURN_ROUTE_FAILED",
             tostring(oldZone).." -> "..tostring(p.waypoint).." | "..tostring(err))
@@ -1519,11 +1576,35 @@ local function walkFromStoneToZone(zoneName,id)
     local target=p and unpackCF(p.dig)
     if not target then return false,"Missing dig coordinates: "..zoneName end
     S.dredgeCurrentWork="Walking from stone to "..zoneName
+    local recording=zoneName=="Enchanted Ruins"
+    if recording then
+        S.enchantedInboundRoute=nil
+        S.enchantedRecording={}
+        recordEnchantedStep()
+        S.diagEvent("ENCHANTED_RECORD_START","Recording actual walk to deposit")
+    end
     local ok,err=followRoutePoints(zoneName,id,false)
-    if not ok then return false,err end
+    if not ok then
+        S.enchantedRecording=nil
+        return false,err
+    end
     local reached,why=walkRoute(target,id,1150)
-    if not reached then return false,why end
-    if stableAt(target,id,12,1.0,3.1) then return true end
+    if not reached then
+        S.enchantedRecording=nil
+        return false,why
+    end
+    local settled=stableAt(target,id,12,1.0,3.1)
+    if recording then
+        recordEnchantedStep()
+        local steps=S.enchantedRecording
+        S.enchantedRecording=nil
+        if settled and steps and #steps>=3 then
+            S.enchantedInboundRoute=steps
+            S.diagEvent("ENCHANTED_RECORD_DONE",
+                string.format("%d actual path points saved",#steps))
+        end
+    end
+    if settled then return true end
     return false,"Reached dig position but did not stay there"
 end
 local function goWaypoint(wp,id)
@@ -3403,6 +3484,7 @@ local function startWorker(asDredge)
         if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
+        S.enchantedRecording=nil;S.enchantedInboundRoute=nil
         S.dredgeAt=nil;S.dredgeAppliedCap="UNSET"
         S.dredgeCapLockedZone=nil;S.dredgeCapLockedKey=nil
         S.dredgeTurnAttempts=0;S.dredgeTurnRetryAt=nil
