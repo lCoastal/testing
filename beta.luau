@@ -1692,43 +1692,40 @@ local function dredgeCycle(id)
     local L=math.max(1,S.dredgeUncappedLuck)
     local need={}
     for _,w in ipairs(wants) do need[w.m]=w.n end
+    -- Sticky Dredge zone:
+    -- Replanning on 10% progress changes or each Capacity fluctuation
+    -- caused costly Volcanic Sands / Volcanic Springs / Sandstone trips.
+    -- Keep the selected deposit while ALL of its assigned minerals
+    -- still need collecting and the deposit remains available.
+    -- As soon as ANY assigned mineral finishes, replan immediately
+    -- (including a new Luck Cap for the remaining mineral in this zone).
     local keep=false
-    if S.dredgeCurrent and S.dredgeGroup and openNow(baseDrop(S.dredgeCurrent))
-        and eligible(S.dredgeCurrent,5)
-        and S.dredgePlanLuck and math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
-        and S.dredgePlanCapacity==capacityNow then
-        local progressShift=false
-        for _,g in ipairs(S.dredgeGroup) do
-            local planned=S.dredgePlannedRemaining and S.dredgePlannedRemaining[g.m] or 0
-            local left=need[g.m] or 0
-            -- Completion is a hard replanning boundary, even if both
-            -- minerals share a deposit. Ordinary progress retains the
-            -- existing 10% heuristic to avoid cap oscillation.
-            if planned>0 and (left==0 or math.abs(planned-left)/planned>=.10) then
-                progressShift=true
-                break
+    if S.dredgeCurrent and S.dredgeGroup and #S.dredgeGroup>0 then
+        local zone=baseDrop(S.dredgeCurrent)
+        if openNow(zone) and eligible(S.dredgeCurrent,5) then
+            local anyRemaining=false
+            local completedAssigned=false
+            for _,item in ipairs(S.dredgeGroup) do
+                if (need[item.m] or 0)>0 then
+                    anyRemaining=true
+                else
+                    completedAssigned=true
+                end
             end
-            if left>0 then keep=true end
+            keep=anyRemaining and not completedAssigned
+            if keep then
+                -- Update the readout but don't change the chosen zone
+                -- or active cap when Capacity/luck/progress fluctuate.
+                S.dredgePlanCapacity=capacityNow
+            else
+                S.diagEvent("DREDGE_REPLAN_REASON",
+                    completedAssigned and "assigned objective completed"
+                    or "assigned objectives exhausted")
+            end
+        else
+            S.diagEvent("DREDGE_REPLAN_REASON",
+                "current zone closed or equipment unavailable: "..tostring(zone))
         end
-        if progressShift then keep=false end
-    end
-    -- Give a freshly reached deposit three successful pans before changing
-    -- zones due to small progress-ratio shifts; do not hold if its quest
-    -- objectives are all finished or a timed/safety restriction has changed.
-    if not keep and S.dredgeAt and S.dredgeCurrent and S.dredgeGroup
-        and S.dredgeAt==baseDrop(S.dredgeCurrent)
-        and S.cycles-(S.dredgeZoneCycle or 0)<3
-        and openNow(S.dredgeAt) and eligible(S.dredgeCurrent,5)
-        and S.dredgePlanLuck and
-        math.abs(L-S.dredgePlanLuck)/math.max(1,S.dredgePlanLuck)<.01
-        and S.dredgePlanCapacity==capacityNow then
-        local anyCompleted=false
-        for _,item in ipairs(S.dredgeGroup) do
-            local left=need[item.m] or 0
-            if left==0 then anyCompleted=true;break end
-            if left>0 then keep=true end
-        end
-        if anyCompleted then keep=false end
     end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
