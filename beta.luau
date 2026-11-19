@@ -2732,7 +2732,19 @@ local function farming(id,r,target)
                 lastProgress=os.clock()
                 S.diagDigProgressAt=lastProgress
             elseif os.clock()-lastProgress>3 then
-                return "Digging stalled (3s without Fill progress)"
+                -- The player can be rubber-banded to water after a recent
+                -- teleport. Fix position only on a real stall, never per dig.
+                local avatar=root()
+                local drift=avatar and S.dig and
+                    (avatar.Position-S.dig.Position).Magnitude or math.huge
+                if drift>7 then
+                    S.diagEvent("DIG_DRIFT_REPAIR",string.format("%.1f studs",drift))
+                    if not farmMove(S.dig,id) then return "Dig position correction failed" end
+                    lastProgress=os.clock()
+                    S.diagDigProgressAt=lastProgress
+                else
+                    return "Digging stalled (3s without Fill progress)"
+                end
             end
         end
         S.traceEnd("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
@@ -2746,6 +2758,13 @@ local function farming(id,r,target)
         moved=farmMove(S.water,id)
         S.traceEnd("MOVE_TO_WATER","success="..tostring(moved))
         if not moved then return "Water teleport failed" end
+        -- Dredge changes zones and Luck Cap, so a one-time settle check
+        -- after new-zone arrival avoids racing a server position update.
+        -- Ordinary Auto Farm gets no extra wait.
+        if S.dredge and S.dredgeAt and
+            (S.cycles-(S.dredgeZoneCycle or 0))<1 then
+            if not pause(.18,id) then return end
+        end
         local waterTime=os.clock()-waterStart
         S.rewards=0;S.lastReward=0;S.completed=false;S.waiting=true;S.seen={}
         local panStart=os.clock()
@@ -2754,11 +2773,33 @@ local function farming(id,r,target)
         local panAttempts=0
         for _=1,15 do
             if not valid(id) then return end
+            -- Server corrections can snap us back to sand between move()
+            -- and the Pan request. Cheap fast path: just check distance.
+            local avatar=root()
+            if not avatar then return "Character root unavailable" end
+            local drift=(avatar.Position-S.water.Position).Magnitude
+            if drift>7 then
+                S.diagEvent("PAN_POSITION_REPAIR",string.format(
+                    "before request: %.1f studs from water",drift))
+                if not farmMove(S.water,id) then return "Water position correction failed" end
+                if not pause(.10,id) then return end
+            end
             panAttempts+=1
             local ok,response,err=invoke(r.pan,id)
             if not ok then return "Pan call failed: "..tostring(err) end
             if response==true then accepted=true;break end
-            if not pause(timing("panRetry"),id) then return end
+            -- Recheck position after a rejection. Most failed calls in the
+            -- log happened while the character had snapped back to sand.
+            avatar=root()
+            drift=avatar and (avatar.Position-S.water.Position).Magnitude or math.huge
+            if drift>7 then
+                S.diagEvent("PAN_REJECT_DRIFT",string.format(
+                    "attempt=%d distWater=%.1f",panAttempts,drift))
+                if not farmMove(S.water,id) then return "Water recovery failed" end
+                if not pause(.12,id) then return end
+            else
+                if not pause(timing("panRetry"),id) then return end
+            end
         end
         if not accepted then return "Pan rejected" end
         S.traceEnd("PAN_INVOKE",string.format(
