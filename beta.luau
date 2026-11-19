@@ -608,31 +608,51 @@ local function invoke(r,id,...)
     S.rpcInFlight=S.rpcInFlight or setmetatable({},{__mode="k"})
     local call=S.rpcInFlight[r]
     if call then
+        -- A previous session may have stopped while this server request
+        -- was still in flight. Never discard it and send a duplicate.
         if call.token~=id then
-            S.rpcInFlight[r]=nil -- previous stopped session
-        else
             if not call.done then
-                local waitUntil=os.clock()+timeout*2
-                while valid(id) and not call.done and os.clock()<waitUntil do
-                    task.wait(.05)
+                S.diagEvent("RPC_PREVIOUS_SESSION_WAIT",
+                    r.Name.." still pending from earlier session; no duplicate request")
+                local nextLog=os.clock()+12
+                while valid(id) and not call.done do
+                    task.wait(.1)
+                    if os.clock()>=nextLog then
+                        S.diagEvent("RPC_RECOVERY_WAIT",string.format(
+                            "%s previous request pending %.1fs",
+                            r.Name,os.clock()-call.started))
+                        nextLog=os.clock()+12
+                    end
                 end
             end
             if not valid(id) then return false,nil,"Worker stopped" end
-            if not call.done then
-                local info=string.format("%s still pending for %.1fs",
-                    r.Name,os.clock()-call.started)
-                S.diagEvent("RPC_STILL_PENDING",info)
-                return false,nil,info
-            end
             S.rpcInFlight[r]=nil
-            if not call.ok then
-                return false,nil,"Delayed "..r.Name.." error: "..tostring(call.response)
-            end
-            S.diagEvent("RPC_LATE_RESPONSE",r.Name..
-                " completed after local timeout ("..
-                string.format("%.2fs",os.clock()-call.started)..")")
-            return true,call.response,nil
+            S.diagEvent("RPC_PREVIOUS_SESSION_SETTLED",r.Name..
+                " | previous result discarded; recheck live Fill")
+            -- This invocation has different arguments/session. Its caller
+            -- must recheck actual pan state rather than reuse an old reply.
+            return false,nil,"Prior "..r.Name.." request settled; retry after state check"
         end
+        if not call.done then
+            S.diagEvent("RPC_RECOVERY_WAIT",r.Name.." still in flight; waiting")
+            local nextLog=os.clock()+12
+            while valid(id) and not call.done do
+                task.wait(.1)
+                if os.clock()>=nextLog then
+                    S.diagEvent("RPC_RECOVERY_WAIT",string.format(
+                        "%s pending %.1fs",r.Name,os.clock()-call.started))
+                    nextLog=os.clock()+12
+                end
+            end
+        end
+        if not valid(id) then return false,nil,"Worker stopped" end
+        S.rpcInFlight[r]=nil
+        if not call.ok then
+            return false,nil,"Delayed "..r.Name.." error: "..tostring(call.response)
+        end
+        S.diagEvent("RPC_LATE_RESPONSE",r.Name.." completed ("..
+            string.format("%.2fs",os.clock()-call.started)..")")
+        return true,call.response,nil
     end
     local args=table.pack(...)
     call={token=id,started=os.clock(),done=false,ok=false,response=nil}
@@ -660,10 +680,34 @@ local function invoke(r,id,...)
     end
     if not valid(id) then return false,nil,"Worker stopped" end
     if not call.done then
-        local detail=string.format("%s timed out after %.1fs (still in flight)",
+        local detail=string.format("%s exceeded %.1fs (still in flight)",
             r.Name,timeout)
         S.diagEvent("RPC_TIMEOUT",detail)
-        return false,nil,detail
+        if r.Name=="Collect" or r.Name=="Pan" then
+            -- Recovery is deliberately off the normal fast path. Keep the
+            -- SAME InvokeServer alive until it actually returns; never
+            -- overlap another Collect/Pan with an unresolved one.
+            S.diagEvent("RPC_RECOVERY_WAIT",r.Name..
+                " | holding original request; stop toggle remains responsive")
+            local nextLog=os.clock()+12
+            while valid(id) and not call.done do
+                task.wait(.1)
+                if os.clock()>=nextLog then
+                    S.diagEvent("RPC_RECOVERY_WAIT",string.format(
+                        "%s still waiting %.1fs | no duplicate sent",
+                        r.Name,os.clock()-call.started))
+                    nextLog=os.clock()+12
+                end
+            end
+            if not valid(id) then return false,nil,"Worker stopped" end
+            S.diagEvent("RPC_RECOVERY_DONE",r.Name..
+                " | reply received after "..
+                string.format("%.2fs",os.clock()-call.started))
+        else
+            -- Quest/status calls retain their original short timeout.
+            -- A later invocation will first wait for this one to settle.
+            return false,nil,detail
+        end
     end
     S.rpcInFlight[r]=nil
     if not call.ok then
@@ -3188,7 +3232,16 @@ local function farming(id,r,target)
             S.diagDigCalls+=1
             S.diagLastCollectMs=math.floor((os.clock()-sent)*1000+.5)
             S.diagLastCollectResult=ok and tostring(response) or tostring(err)
-            if not ok then return "Collect failed: "..tostring(err) end
+            if not ok then
+                if tostring(err):find("Prior Collect request settled",1,true) then
+                    S.diagEvent("COLLECT_RECOVERY_RECHECK", "Prior result settled; checking Fill")
+                    -- Re-evaluate Fill before sending any new Collect.
+                    lastProgress=os.clock()
+                    S.diagDigProgressAt=lastProgress
+                    continue
+                end
+                return "Collect failed: "..tostring(err)
+            end
             if not pause(S.timing("dig"),id) then return end
             local after=fill(r)
             if after and after>before+.001 then
