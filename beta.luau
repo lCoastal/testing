@@ -1677,14 +1677,25 @@ local function returnToMappedStone(id)
             tostring(oldZone).." -> "..tostring(p.waypoint).." | "..tostring(err))
         return false,err
     end
-    -- Do not insist on walking into the stone's exact (often blocked) pivot.
+    -- The recorded Abyss reverse route ends at a reachable ledge, but the
+    -- Overgrown Grotto stone pivot can be inaccessible to pathfinding.
+    -- Allow the *mapped* departure stone to be tried from a nearby ledge,
+    -- without claiming FastTravel succeeded until arrival is verified.
+    local rr=root()
+    if oldZone=="Abyssal Depth" and rr and
+        (rr.Position-stone.Position).Magnitude<=75 then
+        S.diagEvent("ABYSS_STONE_LEDGE",
+            string.format("near mapped %s stone at %.1f studs; trying verified travel",
+                tostring(p.waypoint),(rr.Position-stone.Position).Magnitude))
+        return true
+    end
     local atStone,stoneErr=approachStone(stone,id,p.waypoint)
     if oldZone=="Abyssal Depth" then
-        local rr=root()
+        local after=root()
         S.diagEvent("ABYSS_RETURN_TO_STONE",
             string.format("success=%s waypoint=%s dist=%.1f err=%s",
                 tostring(atStone),tostring(p.waypoint),
-                rr and (rr.Position-stone.Position).Magnitude or -1,
+                after and (after.Position-stone.Position).Magnitude or -1,
                 tostring(stoneErr)))
     end
     return atStone,stoneErr
@@ -1779,7 +1790,8 @@ local function goWaypoint(wp,id)
         local preset=S.presets[oldZone]
         local mapped=preset and folder:FindFirstChild(preset.waypoint or "")
         local mappedCF=mapped and S.getWaypointCF(mapped)
-        if mappedCF and (r.Position-mappedCF.Position).Magnitude<=65 then
+        local departureRange=oldZone=="Abyssal Depth" and 75 or 65
+        if mappedCF and (r.Position-mappedCF.Position).Magnitude<=departureRange then
             from=mapped
         end
     end
@@ -1787,7 +1799,9 @@ local function goWaypoint(wp,id)
     if not from then return false,"No departure waypoint found" end
     local origin=S.getWaypointCF(from)
     if not origin then return false,"Departure waypoint has no pivot" end
-    if (r.Position-origin.Position).Magnitude>52 then
+    local fromAbyssLedge=oldZone=="Abyssal Depth" and from.Name=="Overgrown Grotto"
+        and (r.Position-origin.Position).Magnitude<=75
+    if (r.Position-origin.Position).Magnitude>52 and not fromAbyssLedge then
         S.dredgeCurrentWork="Walking to departure stone "..from.Name
         local ok,err=approachStone(origin,id,from.Name)
         if not ok then return false,"Cannot reach departure stone: "..tostring(err) end
@@ -1798,6 +1812,11 @@ local function goWaypoint(wp,id)
     end
     if from==to then
         return stableAt(target,id,78,1.0,2.7)
+    end
+    if fromAbyssLedge then
+        S.diagEvent("ABYSS_STONE_TRAVEL_ATTEMPT",string.format(
+            "mapped departure=%s distance=%.1f destination=%s",
+            from.Name,(r.Position-origin.Position).Magnitude,tostring(wp)))
     end
     local rem=RS:FindFirstChild("Remotes")
     local misc=rem and rem:FindFirstChild("Misc")
