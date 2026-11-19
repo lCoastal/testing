@@ -1571,9 +1571,37 @@ local function returnToMappedStone(id)
     -- Do not insist on walking into the stone's exact (often blocked) pivot.
     return approachStone(stone,id,p.waypoint)
 end
+-- Resolve the actual deposit coordinates separately from saved waypoint
+-- checkpoints. An old/local override can incorrectly point a zone's dig
+-- position thousands of studs away even though its route is correct.
+-- Only auto-repair Fortune River when its built-in destination is backed
+-- by a nearby recorded route endpoint; do not overwrite user preset files.
+function S.resolveDredgeDigWater(zoneName)
+    local p=S.presets[zoneName]
+    local dig=p and S.unpackCF(p.dig)
+    local water=p and S.unpackCF(p.water)
+    if zoneName=="Fortune River" and p then
+        local built=S.defaultPresets[zoneName]
+        local goodDig=built and S.unpackCF(built.dig)
+        local goodWater=built and S.unpackCF(built.water)
+        local route=p.route or {}
+        local endpoint=#route>0 and S.unpackCF(route[#route])
+        if goodDig and goodWater and endpoint
+            and (endpoint.Position-goodDig.Position).Magnitude<30
+            and (not dig or (dig.Position-goodDig.Position).Magnitude>100
+                or not water or (water.Position-goodWater.Position).Magnitude>100) then
+            S.diagEvent("DREDGE_COORD_REPAIR",string.format(
+                "zone=%s badDigDist=%.1f routeToDefault=%.1f; using built-in dig/water",
+                zoneName,dig and (dig.Position-goodDig.Position).Magnitude or -1,
+                (endpoint.Position-goodDig.Position).Magnitude))
+            return goodDig,goodWater
+        end
+    end
+    return dig,water
+end
 local function walkFromStoneToZone(zoneName,id)
     local p=S.presets[zoneName]
-    local target=p and S.unpackCF(p.dig)
+    local target=S.resolveDredgeDigWater(zoneName)
     if not target then return false,"Missing dig coordinates: "..zoneName end
     S.dredgeCurrentWork="Walking from stone to "..zoneName
     local recording=zoneName=="Enchanted Ruins"
@@ -2041,7 +2069,7 @@ local function dredgeCycle(id)
         return false
     end
     if S.dredgeAt~=targetZone then
-        S.dig=S.unpackCF(p.dig);S.water=S.unpackCF(p.water)
+        S.dig,S.water=S.resolveDredgeDigWater(targetZone)
         if not S.dig or not S.water then
             dredgeText("Zone coordinates missing");return false
         end
