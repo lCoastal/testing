@@ -392,17 +392,21 @@ end
 -- Find a compatible pan whether held or temporarily in Backpack.
 function S.panInBackpack()
     local bag=P:FindFirstChildOfClass("Backpack")
-    if not bag then return nil end
-    for _,tool in ipairs(bag:GetChildren()) do
-        if tool:IsA("Tool") then
-            local scripts=tool:FindFirstChild("Scripts")
-            local d=scripts and scripts:FindFirstChild("Collect")
-            local p=scripts and scripts:FindFirstChild("Pan")
-            local sh=scripts and scripts:FindFirstChild("Shake")
-            if d and p and sh and d:IsA("RemoteFunction") and
-                p:IsA("RemoteFunction") and sh:IsA("RemoteEvent") then
-                return {tool=tool,dig=d,pan=p,shake=sh,
-                    done=scripts:FindFirstChild("PanningComplete")}
+    local custom=P:FindFirstChild("BackpackTwo")
+    for _,container in ipairs({bag or false,custom or false}) do
+        if container then
+            for _,tool in ipairs(container:GetChildren()) do
+                if tool:IsA("Tool") then
+                    local scripts=tool:FindFirstChild("Scripts")
+                    local d=scripts and scripts:FindFirstChild("Collect")
+                    local p=scripts and scripts:FindFirstChild("Pan")
+                    local sh=scripts and scripts:FindFirstChild("Shake")
+                    if d and p and sh and d:IsA("RemoteFunction") and
+                        p:IsA("RemoteFunction") and sh:IsA("RemoteEvent") then
+                        return {tool=tool,dig=d,pan=p,shake=sh,
+                            done=scripts:FindFirstChild("PanningComplete")}
+                    end
+                end
             end
         end
     end
@@ -1813,7 +1817,37 @@ local function goWaypoint(wp,id)
     if from==to then
         return stableAt(target,id,78,1.0,2.7)
     end
+    if fromAbyssLedge and (r.Position-origin.Position).Magnitude>44 then
+        -- The mapped upper ledge is ~65 studs from the stone, which can be
+        -- outside the server's FastTravel range. Use a short ground-checked
+        -- hop toward it, not a blind long-range teleport.
+        local away=Vector3.new(r.Position.X-origin.Position.X,0,
+            r.Position.Z-origin.Position.Z)
+        if away.Magnitude<1 then away=Vector3.new(1,0,0) end
+        local candidate=origin.Position+away.Unit*33
+        local params=RaycastParams.new()
+        params.FilterType=Enum.RaycastFilterType.Exclude
+        params.FilterDescendantsInstances={P.Character}
+        local ground=workspace:Raycast(candidate+Vector3.new(0,60,0),
+            Vector3.new(0,-130,0),params)
+        if ground then candidate=ground.Position+Vector3.new(0,3,0)
+        else candidate=Vector3.new(candidate.X,r.Position.Y,candidate.Z) end
+        local gap=(r.Position-candidate).Magnitude
+        S.diagEvent("ABYSS_STONE_CLOSE_APPROACH",string.format(
+            "from %.1f studs, gap %.1f", (r.Position-origin.Position).Magnitude,gap))
+        if gap<=60 then
+            local hopped=move(CFrame.new(candidate),id)
+            r=root()
+            S.diagEvent("ABYSS_STONE_CLOSE_RESULT",
+                string.format("moved=%s distance=%.1f",tostring(hopped),
+                    r and (r.Position-origin.Position).Magnitude or -1))
+        end
+    end
     if fromAbyssLedge then
+        r=root()
+        if not r or (r.Position-origin.Position).Magnitude>52 then
+            return false,"Abyss departure stone out of travel range after close approach"
+        end
         S.diagEvent("ABYSS_STONE_TRAVEL_ATTEMPT",string.format(
             "mapped departure=%s distance=%.1f destination=%s",
             from.Name,(r.Position-origin.Position).Magnitude,tostring(wp)))
@@ -1987,8 +2021,6 @@ local function maintainAbyssFlare(id)
         return
     end
     if now<(S.abyssFlareNextAttempt or 0) then return end
-    -- Prospecting uses CustomBackpack. An item inside BackpackTwo is
-    -- NOT necessarily a Roblox Tool and Humanoid:EquipTool will not equip it.
     local c=P.Character
     local b2=P:FindFirstChild("BackpackTwo")
     local bag=P:FindFirstChildOfClass("Backpack")
@@ -1997,87 +2029,109 @@ local function maintainAbyssFlare(id)
     local equip=custom and custom:FindFirstChild("EquipRemote")
     if not c or not equip or not equip:IsA("RemoteEvent") then
         S.abyssFlareNextAttempt=now+12
-        S.diagEvent("ABYSS_ITEM_EQUIP_MISSING","Character or CustomBackpack.EquipRemote missing")
+        S.diagEvent("ABYSS_ITEM_EQUIP_MISSING","Character or EquipRemote missing")
         return
     end
     local function findItem(name)
-        -- Prefer Firefly Flare whether in BackpackTwo or already held.
-        for _,parent in ipairs({c,b2,bag}) do
-            local item=parent and parent:FindFirstChild(name)
-            if item then return item end
-        end
-        return nil
-    end
-    local item=findItem("Firefly Flare")
-    local flare=not not item
-    if not item then item=findItem("Luminant Totem") end
-    if not item then
-        S.abyssFlareNextAttempt=now+15
-        S.diagEvent("ABYSS_ITEM_UNAVAILABLE",
-            "Neither Firefly Flare nor Luminant Totem in Character/BackpackTwo/Backpack")
-        return
-    end
-    local name=item.Name
-    S.diagEvent("ABYSS_ITEM_EQUIP_REQUEST",
-        name.." | source="..item.Parent:GetFullName())
-    local equipped,err=pcall(function() equip:FireServer(item) end)
-    if not equipped then
-        S.abyssFlareNextAttempt=now+12
-        S.diagEvent("ABYSS_ITEM_EQUIP_ERROR",name.." | "..tostring(err))
-        return
-    end
-    -- Allow the server to equip a fresh Tool in Character. Keep the
-    -- operation between pans and never spam EquipRemote or Activate.
-    local held
-    local deadline=os.clock()+1.5
-    repeat
-        if not valid(id) then return end
-        held=c:FindFirstChild(name)
-        if held and held:IsA("Tool") then break end
-        task.wait(.05)
-    until os.clock()>=deadline
-    S.diagEvent("ABYSS_ITEM_EQUIP_RESULT",
-        name.." | held="..tostring(held~=nil)..
-        " | class="..tostring(held and held.ClassName or "none"))
-    if not flare then
-        -- Totem fallback is equip-only until its placement API is known.
-        S.abyssFlareNextAttempt=os.clock()+20
-        S.diagEvent("ABYSS_TOTEM_FALLBACK",
-            "Luminant Totem equipped/requested; placement not confirmed")
-        return
-    end
-    if not held or not held:IsA("Tool") then
-        S.abyssFlareNextAttempt=os.clock()+12
-        S.diagEvent("ABYSS_FLARE_NOT_HELD",
-            "EquipRemote fired but no Firefly Flare Tool appeared in Character")
-        return
-    end
-    -- EquipRemote is only equip. Throwing may use Tool:Activate or a
-    -- game-specific handler; do not claim placement from Activate success.
-    local activated,why=pcall(function() held:Activate() end)
-    S.diagEvent(activated and "ABYSS_FLARE_ACTIVATE_SENT" or "ABYSS_FLARE_ACTIVATE_ERROR",
-        activated and "Tool:Activate called; waiting for world confirmation"
-            or tostring(why))
-    if not pause(.35,id) then return end
-    if S.nearbyFireflyFlare() then
-        S.diagEvent("ABYSS_FLARE_CONFIRMED","Lit flare detected near player")
-        S.abyssFlareNextAttempt=os.clock()+90
-    else
-        S.diagEvent("ABYSS_FLARE_UNCONFIRMED",
-            "No lit flare detected; throw action may need a different game remote")
-        S.abyssFlareNextAttempt=os.clock()+20
-    end
-    -- Restore the pan through the regular equip path if available.
-    local pan=panTool() or S.panInBackpack()
-    if pan and valid(id) then
-        if pan.tool.Parent~=c then
-            pcall(function() equip:FireServer(pan.tool) end)
-            local hum=c:FindFirstChildOfClass("Humanoid")
-            if hum and pan.tool.Parent==bag then
-                pcall(function() hum:EquipTool(pan.tool) end)
+        for _,container in ipairs({c,b2 or false,bag or false}) do
+            if container then
+                local found=container:FindFirstChild(name)
+                if found then return found end
             end
         end
     end
+    local panBefore=panTool() or S.panInBackpack()
+    local panName=panBefore and panBefore.tool.Name
+    if not panName then
+        local stats=P:FindFirstChild("Stats")
+        panName="Pharaoh's Pan"
+    end
+    local item=findItem("Firefly Flare")
+    local isFlare=item~=nil
+    if not item then item=findItem("Luminant Totem") end
+    if not item then
+        S.abyssFlareNextAttempt=now+15
+        S.diagEvent("ABYSS_ITEM_UNAVAILABLE","No Firefly Flare or Luminant Totem")
+        return
+    end
+    -- Preserve the pan before changing tools. Restore it in all paths,
+    -- including activation errors and totem fallback.
+    local panSaved=panBefore and panBefore.tool or findItem(panName)
+    local function restorePan()
+        if not valid(id) then return end
+        local pan=(panTool() or S.panInBackpack())
+        local candidate=pan and pan.tool or nil
+        if not candidate or candidate.Parent==nil then candidate=panSaved end
+        if not candidate or candidate.Parent==nil then
+            candidate=findItem(panName)
+        end
+        if not candidate then
+            S.diagEvent("ABYSS_PAN_RESTORE_MISSING",panName)
+            return
+        end
+        if candidate.Parent==c and candidate:IsA("Tool") then
+            S.diagEvent("ABYSS_PAN_RESTORED","Already equipped "..candidate.Name)
+            return
+        end
+        local ok,err=pcall(function() equip:FireServer(candidate) end)
+        if not ok then
+            S.diagEvent("ABYSS_PAN_RESTORE_ERROR",tostring(err))
+            return
+        end
+        local hum=c:FindFirstChildOfClass("Humanoid")
+        if bag and candidate:IsA("Tool") and candidate.Parent==bag and hum then
+            pcall(function() hum:EquipTool(candidate) end)
+        end
+        local untilAt=os.clock()+1.25
+        while valid(id) and os.clock()<untilAt do
+            local current=panTool()
+            if current and current.tool.Parent==c then
+                S.diagEvent("ABYSS_PAN_RESTORED",current.tool.Name)
+                return
+            end
+            task.wait(.05)
+        end
+        S.diagEvent("ABYSS_PAN_RESTORE_UNCONFIRMED",
+            "EquipRemote sent for "..candidate.Name.." but no held pan confirmed")
+    end
+
+    local ok,err=pcall(function()
+        S.diagEvent("ABYSS_ITEM_EQUIP_REQUEST",item.Name)
+        equip:FireServer(item)
+        local held
+        local untilAt=os.clock()+1.5
+        while valid(id) and os.clock()<untilAt do
+            held=c:FindFirstChild(item.Name)
+            if held and held:IsA("Tool") then break end
+            task.wait(.05)
+        end
+        if not isFlare then
+            S.abyssFlareNextAttempt=os.clock()+20
+            S.diagEvent("ABYSS_TOTEM_FALLBACK","Totem equip-only; placement not confirmed")
+        elseif held and held:IsA("Tool") and valid(id) then
+            local sent,why=pcall(function() held:Activate() end)
+            S.diagEvent(sent and "ABYSS_FLARE_ACTIVATE_SENT"
+                or "ABYSS_FLARE_ACTIVATE_ERROR",sent and "Tool:Activate" or tostring(why))
+            task.wait(.35)
+            if S.nearbyFireflyFlare() then
+                S.diagEvent("ABYSS_FLARE_CONFIRMED","Lit flare detected")
+                S.abyssFlareNextAttempt=os.clock()+90
+            else
+                S.diagEvent("ABYSS_FLARE_UNCONFIRMED","No placed flare detected")
+                S.abyssFlareNextAttempt=os.clock()+20
+            end
+        else
+            S.diagEvent("ABYSS_FLARE_NOT_HELD","EquipRemote sent; Tool not held")
+            S.abyssFlareNextAttempt=os.clock()+12
+        end
+    end)
+    if not ok then
+        S.diagEvent("ABYSS_FLARE_ERROR",tostring(err))
+        S.abyssFlareNextAttempt=os.clock()+12
+    end
+    -- Never leave the consumable selected when farming resumes.
+    local restored,why=pcall(restorePan)
+    if not restored then S.diagEvent("ABYSS_PAN_RESTORE_ERROR",tostring(why)) end
 end
 local function dredgeCycle(id)
     if not valid(id) or not S.dredge then return false end
