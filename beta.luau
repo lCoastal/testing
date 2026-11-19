@@ -2773,33 +2773,25 @@ local function farming(id,r,target)
         local panAttempts=0
         for _=1,15 do
             if not valid(id) then return end
-            -- Server corrections can snap us back to sand between move()
-            -- and the Pan request. Cheap fast path: just check distance.
-            local avatar=root()
-            if not avatar then return "Character root unavailable" end
-            local drift=(avatar.Position-S.water.Position).Magnitude
-            if drift>7 then
-                S.diagEvent("PAN_POSITION_REPAIR",string.format(
-                    "before request: %.1f studs from water",drift))
-                if not farmMove(S.water,id) then return "Water position correction failed" end
-                if not pause(.10,id) then return end
-            end
+            -- Immediately try Pan after arriving at water.
+            -- Position checks are reserved for rejected Dredge calls.
             panAttempts+=1
             local ok,response,err=invoke(r.pan,id)
             if not ok then return "Pan call failed: "..tostring(err) end
             if response==true then accepted=true;break end
-            -- Recheck position after a rejection. Most failed calls in the
-            -- log happened while the character had snapped back to sand.
-            avatar=root()
-            drift=avatar and (avatar.Position-S.water.Position).Magnitude or math.huge
-            if drift>7 then
-                S.diagEvent("PAN_REJECT_DRIFT",string.format(
-                    "attempt=%d distWater=%.1f",panAttempts,drift))
-                if not farmMove(S.water,id) then return "Water recovery failed" end
-                if not pause(.12,id) then return end
-            else
-                if not pause(timing("panRetry"),id) then return end
+            -- Dredge only: correct a server snapback after a rejection.
+            -- Regular Auto Farm keeps the original turbo retry loop.
+            if S.dredge then
+                local avatar=root()
+                local drift=avatar and S.water and
+                    (avatar.Position-S.water.Position).Magnitude or 0
+                if drift>7 then
+                    S.diagEvent("PAN_REJECT_DRIFT",string.format(
+                        "attempt=%d distWater=%.1f",panAttempts,drift))
+                    if not farmMove(S.water,id) then return "Water recovery failed" end
+                end
             end
+            if not pause(timing("panRetry"),id) then return end
         end
         if not accepted then return "Pan rejected" end
         S.traceEnd("PAN_INVOKE",string.format(
@@ -3111,15 +3103,11 @@ end)
 -- the toggle off: we re-resolve the equipped pan and retry quickly.
 local function startWorker(asDredge)
     if S.running then return end
-    -- Manual farming must use the selected zone, even when the dropdown
-    -- was restored from saved settings rather than actively clicked.
-    if not asDredge then
-        applyZone()
-        if not S.dig or not S.water then
-            show("Missing dig/water positions for "..selectedZone())
-            S.diagEvent("ZONE_NOT_CONFIGURED",selectedZone())
-            return
-        end
+    -- AUTO FARM FAST START: saved locations are already loaded when
+    -- selected/captured. Do not reload presets or run any zone setup.
+    if not asDredge and (not S.dig or not S.water) then
+        show("Set dig and water positions first")
+        return
     end
     if asDredge then
         if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
@@ -3170,7 +3158,7 @@ local function startWorker(asDredge)
     local id=S.token
     farmB.Text="AUTO FARM: ON"
     S.waiting=false
-    show("Starting")
+    show(asDredge and "Planning Dredge" or "Digging")
 
     task.spawn(function()
         while valid(id) do
