@@ -2867,6 +2867,12 @@ local function farming(id,r,target)
         end
         if not done then
             S.diagEvent("NO_COMPLETION",S.diagSnapshot())
+            if S.rewards==0 then
+                S.diagEvent("PAN_NO_REWARDS",
+                    "Pan accepted, but zero rewards and no completion event; "..
+                    "stopping instead of repeatedly invoking stalled remotes")
+                return "Pan accepted but server delivered no rewards or completion"
+            end
             return "No completion detected"
         end
         if not valid(id) then return end
@@ -3254,6 +3260,26 @@ local function startWorker(asDredge)
                 S.traceNextStallAt=nil
                 S.diagLastFailure=tostring(reason)
                 S.diagEvent("RECOVERY",tostring(reason).." | "..S.diagSnapshot())
+                -- A pending RemoteFunction cannot be canceled safely. More
+                -- retries only pile up when the server is unresponsive.
+                -- Likewise, a successful Pan with zero rewards and no
+                -- completion is not a position error; avoid the repeat loop.
+                local failureText=tostring(reason)
+                local unresponsive=S.dredge and (
+                    failureText:find("still in flight",1,true) or
+                    failureText:find("still pending",1,true) or
+                    failureText:find("server delivered no rewards",1,true))
+                if unresponsive then
+                    local message="Server response stalled: "..failureText
+                    S.diagEvent("DREDGE_SERVER_UNRESPONSIVE",
+                        message.." | "..S.diagSnapshot())
+                    S.liveDebugRecord("DREDGE_SERVER_UNRESPONSIVE",message)
+                    S.flushLiveDebug()
+                    stop()
+                    dredgeText("STOPPED: "..message)
+                    show("Dredge stopped: server unresponsive")
+                    break
+                end
                 if S.dredge and S.dredgeAt then
                     local zoneName=S.dredgeAt
                     if S.dredgeFailureZone~=zoneName then
