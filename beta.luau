@@ -858,10 +858,15 @@ local function oddsFor(z,L)
     return results
 end
 local function openNow(z)
-    local t=os.date("*t")
-    local min=t.min+t.sec/60
-    if z=="Timelocked Sanctuary" then return min>=46 or min<14 end
-    if z=="Infernal Heart" then return min>=16 and min<44 end
+    -- Actual hourly schedule is :15 -> :45 for Infernal Heart,
+    -- and :45 -> :15 for Timelocked Sanctuary. The previous :16/:44
+    -- guard rejected an ACTUALLY OPEN Infernal Heart at minute :15,
+    -- making Dinosaur Skull appear to have no eligible deposit.
+    -- The client clock is only a schedule estimate, not proof of
+    -- a server-side gate; movement/Collect still determine access.
+    local minute=os.date("*t").min
+    if z=="Timelocked Sanctuary" then return minute>=45 or minute<15 end
+    if z=="Infernal Heart" then return minute>=15 and minute<45 end
     return true
 end
 local function totemNear(pos)
