@@ -2467,15 +2467,15 @@ local riskButton=button("RISKY ZONES: OFF",177,606,149,32,Body)
 local fullQualityLabel=label("PAN QUALITY: 100%  |  LUCK: FULL (1x)",14,647,312,32,11,FG)
 dredgeStatus=label("Dredge idle",14,684,312,22,11,MUTED)
 dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
-function S.selectedZone() return ZONE_NAMES[S.selectedZone] end
-function S.selectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
+function S.getSelectedZone() return ZONE_NAMES[S.selectedZone] end
+function S.getSelectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
 local routeCountLabel
 local diagZoneName,diagSavedStatus
 function S.refreshPreset()
-    local name=S.selectedZone()
+    local name=S.getSelectedZone()
     local p=S.presets[name]
     zoneName.Text=name
-    waypointName.Text=S.selectedWaypoint()
+    waypointName.Text=S.getSelectedWaypoint()
     local mapping=p and p.waypoint or nil
     presetStatus.Text=((p and S.unpackCF(p.dig)) and "Dig saved" or "Dig missing")..
         " | "..((p and S.unpackCF(p.water)) and "Water saved" or "Water missing")..
@@ -2584,7 +2584,7 @@ relocate(S.zoneLiveInfo,diagnosticPage,14,35)
 S.diagZoneHeading=label("SAVE POSITIONS FOR ZONE",14,108,312,22,10,MUTED)
 relocate(S.diagZoneHeading,diagnosticPage,14,108)
 S.diagPrevZone=button("<",14,134,36,32,diagnosticPage)
-diagZoneName=label(S.selectedZone(),56,134,228,32,12,FG)
+diagZoneName=label(S.getSelectedZone(),56,134,228,32,12,FG)
 diagZoneName.TextXAlignment=Enum.TextXAlignment.Center
 diagZoneName.Font=Enum.Font.GothamMedium
 relocate(diagZoneName,diagnosticPage,56,134)
@@ -2793,7 +2793,7 @@ task.spawn(function()
                 "Running: "..tostring(S.running).." | Mode: "..(S.dredge and "DREDGE" or "FARM")..
                 "\nPhase: "..tostring(S.diagPhase or "Idle")..
                 "\nAction: "..action.." ("..age..")"..
-                "\nSelected: "..tostring(S.selectedZone())..
+                "\nSelected: "..tostring(S.getSelectedZone())..
                 "\nLoaded: "..tostring(S.dredgeAt or S.activeZone or "none")..
                 "\nPan: "..tostring(pan and pan.tool.Name or "NOT EQUIPPED")..
                 "\nFill: "..tostring(pan and fill(pan) or "N/A")..
@@ -3227,7 +3227,7 @@ local function farming(id,r,target)
 end
 
 local function applyZone()
-    local name=S.selectedZone()
+    local name=S.getSelectedZone()
     local p=S.presets[name]
     S.dig=p and S.unpackCF(p.dig) or nil
     S.water=p and S.unpackCF(p.water) or nil
@@ -3242,8 +3242,8 @@ local function capture(key)
     if S.running then show("Turn AUTO FARM OFF before editing");return end
     local r=root()
     if not r then show("Character root unavailable");return end
-    if S.activeZone~=S.selectedZone() then applyZone() end
-    local name=S.selectedZone()
+    if S.activeZone~=S.getSelectedZone() then applyZone() end
+    local name=S.getSelectedZone()
     S.presets[name]=S.presets[name] or {}
     local packed=S.packCF(r.CFrame)
     S.presets[name][key]=packed
@@ -3264,7 +3264,7 @@ bind(S.diagSaveDig.MouseButton1Click,function() capture("dig") end)
 bind(S.diagSaveWater.MouseButton1Click,function() capture("water") end)
 local function selectZone(i)
     S.selectedZone=(i-1)%#ZONE_NAMES+1
-    local p=S.presets[S.selectedZone()]
+    local p=S.presets[S.getSelectedZone()]
     if p and p.waypoint and waypointIndex[p.waypoint] then
         S.selectedWaypoint=waypointIndex[p.waypoint]
     end
@@ -3293,7 +3293,7 @@ bind(S.addWalkPoint.MouseButton1Click,function()
     if S.running then show("Stop the farm before recording a route");return end
     local r=root()
     if not r then show("Character position unavailable");return end
-    local name=S.selectedZone()
+    local name=S.getSelectedZone()
     local p=S.presets[name] or {}
     if not p.waypoint then show("Map this zone to a waypoint first");return end
     local nodes=p.route or {}
@@ -3321,7 +3321,7 @@ bind(S.addWalkPoint.MouseButton1Click,function()
 end)
 bind(S.clearWalkRoute.MouseButton1Click,function()
     if S.running then show("Stop the farm before changing routes");return end
-    local name=S.selectedZone()
+    local name=S.getSelectedZone()
     S.presets[name]=S.presets[name] or {}
     S.presets[name].route={}
     S.overrides[name]=S.overrides[name] or {}
@@ -3333,7 +3333,7 @@ bind(S.clearWalkRoute.MouseButton1Click,function()
 end)
 bind(mapWaypoint.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before editing mappings");return end
-    local name,wp=S.selectedZone(),S.selectedWaypoint()
+    local name,wp=S.getSelectedZone(),S.getSelectedWaypoint()
     S.presets[name]=S.presets[name] or {}
     S.presets[name].waypoint=wp
     S.overrides[name]=S.overrides[name] or {}
@@ -3344,7 +3344,7 @@ bind(mapWaypoint.MouseButton1Click,function()
 end)
 bind(loadZone.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before loading");return end
-    local name=S.selectedZone()
+    local name=S.getSelectedZone()
     local p=S.presets[name]
     if not p or not S.unpackCF(p.dig) or not S.unpackCF(p.water) then
         show("Save both positions for "..name)
@@ -3355,7 +3355,7 @@ bind(loadZone.MouseButton1Click,function()
 end)
 bind(importLegacy.MouseButton1Click,function()
     if S.running then show("Turn AUTO FARM OFF before importing");return end
-    local name,wp=S.selectedZone(),S.selectedWaypoint()
+    local name,wp=S.getSelectedZone(),S.getSelectedWaypoint()
     local old=S.legacyWaypoints[wp]
     if not old or not (old.dig or old.water) then
         show("No legacy positions for "..wp);return
@@ -3376,7 +3376,7 @@ bind(travelWaypoint.MouseButton1Click,function()
     local folder=S.waypointFolder()
     local r=root()
     if not folder or not r then show("Waypoints or character unavailable");return end
-    local to=folder:FindFirstChild(S.selectedWaypoint())
+    local to=folder:FindFirstChild(S.getSelectedWaypoint())
     if not to then show("Selected waypoint not found");return end
     local from=S.closestWaypoint(folder,r.Position)
     if not from then show("Current waypoint could not be resolved");return end
