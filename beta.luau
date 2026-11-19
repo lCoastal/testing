@@ -2769,6 +2769,10 @@ local function selectZone(i)
         S.selectedWaypoint=waypointIndex[p.waypoint]
     end
     refreshPreset()
+    -- Selecting a deposit should also load its farming coordinates.
+    -- Previously selection only changed the label, leaving S.dig/water
+    -- pointed at the last loaded zone until LOAD ZONE was pressed.
+    if not S.running then applyZone() end
     savePresets()
 end
 bind(prevZone.MouseButton1Click,function() selectZone(S.selectedZone-1) end)
@@ -2976,7 +2980,16 @@ end)
 -- the toggle off: we re-resolve the equipped pan and retry quickly.
 local function startWorker(asDredge)
     if S.running then return end
-    if not asDredge and (not S.dig or not S.water) then show("Save both positions");return end
+    -- Manual farming must use the selected zone, even when the dropdown
+    -- was restored from saved settings rather than actively clicked.
+    if not asDredge then
+        applyZone()
+        if not S.dig or not S.water then
+            show("Missing dig/water positions for "..selectedZone())
+            S.diagEvent("ZONE_NOT_CONFIGURED",selectedZone())
+            return
+        end
+    end
     if asDredge then
         if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
