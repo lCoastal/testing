@@ -2180,16 +2180,38 @@ local function dredgeCycle(id)
         end
         if not arrived then
             S.traceEnd("DREDGE_ZONE_TRAVEL","failed: "..tostring(why))
-            S.dredgeCurrentWork="Route blocked: "..targetZone
-            S.dredgeNextWork="Record checkpoints (stone -> dig) or move manually"
             local tries=(S.dredgeTravelFailed[targetZone] or 0)+1
             S.dredgeTravelFailed[targetZone]=tries
-            S.dredgeTravelRetryAt=os.clock()+8
-            dredgeText("Zone route blocked: "..targetZone..": "..tostring(why))
-            -- A rejected/blocked route will not repair itself after a fast
-            -- retry. Stop immediately rather than continuously warping.
+            local failure=tostring(why)
+            local travelRejected=failure:find("Server rejected waypoint travel",1,true)~=nil
+            if travelRejected then
+                -- A late FastTravel reply can move the player AFTER the 8s
+                -- arrival test. Hold off before making any new request.
+                -- If they arrive at the destination stone during that time,
+                -- the next goWaypoint() call detects the arrival and walks
+                -- the route normally, without firing another FastTravel.
+                local retryDelay=tries==1 and 18 or 35
+                S.dredgeTravelRetryAt=os.clock()+retryDelay
+                S.dredgeWarped[targetZone]=nil
+                S.dredgeCurrentWork="Waiting for delayed fast travel to "..targetZone
+                S.dredgeNextWork="Recheck location after travel cooldown"
+                S.diagEvent("DREDGE_TRAVEL_COOLDOWN",
+                    string.format("%s | attempt=%d | cooldown=%ds | %s",
+                        targetZone,tries,retryDelay,failure))
+                if tries<3 then
+                    dredgeText("Fast travel not confirmed; checking again in "..
+                        retryDelay.."s (attempt "..tries.."/3)")
+                    return false
+                end
+            end
+            S.dredgeCurrentWork="Route blocked: "..targetZone
+            S.dredgeNextWork="Check saved stone route or move manually"
+            S.dredgeTravelRetryAt=os.clock()+35
+            dredgeText("Zone route blocked: "..targetZone..": "..failure)
+            -- Avoid uncontrolled warp loops: only stop on three rejected
+            -- attempts or immediately on a non-recoverable walking failure.
             if stop then stop() end
-            dredgeText("Stopped: no stable walking route to "..targetZone)
+            dredgeText("Stopped: cannot confirm route to "..targetZone)
             return false
         end
         S.traceEnd("DREDGE_ZONE_TRAVEL","arrived at "..tostring(targetZone))
