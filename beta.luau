@@ -3775,6 +3775,90 @@ local function autoSell(id,cycle)
         S.selling=false
     end)
 end
+-- Azuralite's recorded DIG and WATER are only ~5 studs apart; the
+-- saved DIG can land in shallow water, where Collect returns false despite
+-- successful travel. Probe ground points on a real fill stall and only
+-- persist a replacement after the server increases the pan's Fill.
+local function azuraliteDigCandidates()
+    if not S.dig or not S.water then return {} end
+    local origin=S.dig.Position
+    local waterPos=S.water.Position
+    local away=Vector3.new(origin.X-waterPos.X,0,origin.Z-waterPos.Z)
+    if away.Magnitude<.5 then away=Vector3.new(0,0,1) end
+    away=away.Unit
+    local side=Vector3.new(-away.Z,0,away.X)
+    local rays=RaycastParams.new()
+    rays.FilterType=Enum.RaycastFilterType.Exclude
+    rays.FilterDescendantsInstances={P.Character}
+    rays.IgnoreWater=false
+    local offsets={
+        {9,0},{13,0},{18,0},{23,0},
+        {9,5},{9,-5},{13,7},{13,-7},
+        {18,8},{18,-8},{5,11},{5,-11},
+        {-3,15},{-3,-15},{-9,13},{-9,-13}
+    }
+    local points={}
+    for _,pair in ipairs(offsets) do
+        local candidate=waterPos+away*pair[1]+side*pair[2]
+        local hit=workspace:Raycast(
+            Vector3.new(candidate.X,origin.Y+24,candidate.Z),
+            Vector3.new(0,-75,0),rays)
+        if hit and hit.Material~=Enum.Material.Water then
+            local pos=Vector3.new(candidate.X,hit.Position.Y+3,candidate.Z)
+            local horizWater=Vector3.new(pos.X-waterPos.X,0,
+                pos.Z-waterPos.Z).Magnitude
+            if horizWater>=9 and
+                (pos-origin).Magnitude<32 and
+                math.abs(pos.Y-origin.Y)<11 then
+                points[#points+1]=CFrame.new(pos)
+            end
+        end
+    end
+    return points
+end
+local function recoverAzuraliteDig(id)
+    if not (S.dredge and S.dredgeAt=="Azuralite Oasis") then
+        return false,"not Azuralite"
+    end
+    local state=S.azuraliteDigSearch
+    if not state or state.water~=S.water then
+        state={water=S.water,points=azuraliteDigCandidates(),
+            index=0,verified=false}
+        S.azuraliteDigSearch=state
+        S.diagEvent("AZURALITE_DIG_SEARCH",
+            "Ground candidates="..#state.points)
+    end
+    while state.index<#state.points do
+        state.index+=1
+        local cf=state.points[state.index]
+        if valid(id) and farmMove(cf,id) then
+            S.dig=cf
+            S.diagEvent("AZURALITE_DIG_PROBE",string.format(
+                "%d/%d at %.1f,%.1f,%.1f",
+                state.index,#state.points,
+                cf.Position.X,cf.Position.Y,cf.Position.Z))
+            return true
+        end
+        if not valid(id) then return false,"Stopped" end
+    end
+    return false,"No more dry-ground candidates ("..#state.points..")"
+end
+local function confirmAzuraliteDig()
+    local state=S.azuraliteDigSearch
+    if not state or state.verified or state.index<=0 or
+        not S.dig or not (S.dredge and S.dredgeAt=="Azuralite Oasis") then return end
+    state.verified=true
+    local packed=S.packCF(S.dig)
+    S.presets["Azuralite Oasis"]=S.presets["Azuralite Oasis"] or {}
+    S.overrides["Azuralite Oasis"]=S.overrides["Azuralite Oasis"] or {}
+    S.presets["Azuralite Oasis"].dig=packed
+    S.overrides["Azuralite Oasis"].dig=packed
+    local ok,err=S.savePresets()
+    S.diagEvent("AZURALITE_DIG_VERIFIED",string.format(
+        "fill increased; saved=%s pos=%.1f,%.1f,%.1f err=%s",
+        tostring(ok),S.dig.Position.X,S.dig.Position.Y,
+        S.dig.Position.Z,tostring(err)))
+end
 -- TURBO / DOUBLE SHAKE CLASSIC FARM: the older, reliable core.
 -- Deliberately no adaptive Pan delays, per-call position corrections,
 -- early movement, automatic tuning, or nested recovery state machine.
@@ -3824,6 +3908,7 @@ local function farming(id,r,target)
             if not pause(S.timing("dig"),id) then return end
             local after=fill(r)
             if after and after>before+.001 then
+                confirmAzuraliteDig()
                 lastProgress=os.clock()
                 S.diagDigProgressAt=lastProgress
             elseif os.clock()-lastProgress>3 then
@@ -3835,6 +3920,14 @@ local function farming(id,r,target)
                 if drift>7 then
                     S.diagEvent("DIG_DRIFT_REPAIR",string.format("%.1f studs",drift))
                     if not farmMove(S.dig,id) then return "Dig position correction failed" end
+                    lastProgress=os.clock()
+                    S.diagDigProgressAt=lastProgress
+                elseif S.dredge and S.dredgeAt=="Azuralite Oasis" then
+                    local recovered,reason=recoverAzuraliteDig(id)
+                    if not recovered then
+                        S.diagEvent("AZURALITE_DIG_SEARCH_FAILED",tostring(reason))
+                        return "Azuralite dig location invalid: "..tostring(reason)
+                    end
                     lastProgress=os.clock()
                     S.diagDigProgressAt=lastProgress
                 else
