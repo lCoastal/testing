@@ -324,7 +324,9 @@ end
 local function descendTo(pos,pointNo)
  local r=root()
  if not r then return false,"character missing" end
- if r.Position.Y<=pos.Y+6 then return true end
+ local aheadY=r.Position.Y<=pos.Y+6
+ local initialHorizontal=Vector3.new(pos.X-r.Position.X,0,pos.Z-r.Position.Z).Magnitude
+ if aheadY and initialHorizontal<=7 then return true end
  local started=os.clock()
  local startY=r.Position.Y
  local lowest=startY
@@ -338,8 +340,17 @@ local function descendTo(pos,pointNo)
   if not healthy() or not r then return false,"died during drop" end
   local horizontal=Vector3.new(pos.X-r.Position.X,0,pos.Z-r.Position.Z).Magnitude
   maxHorizontal=math.max(maxHorizontal,horizontal)
-  if r.Position.Y<=pos.Y+6 then
+  if r.Position.Y<=pos.Y+6 and horizontal<=8 then
    log(string.format("DROP point %d reached Y %.1f (target %.1f) horizontal=%.1f",
+    pointNo,r.Position.Y,pos.Y,horizontal))
+   return true
+  end
+  -- During a fast fall some samples can be passed vertically before
+  -- the character gets over their recorded X/Z coordinates. Allow
+  -- significant downstream descent, but never stall chasing midair
+  -- points the character has already passed.
+  if r.Position.Y<pos.Y-15 then
+   log(string.format("DROP point %d passed below sample (Y=%.1f target=%.1f drift=%.1f)",
     pointNo,r.Position.Y,pos.Y,horizontal))
    return true
   end
@@ -367,6 +378,41 @@ end
 local function runRoute(nodes,jumps,zone,direction)
  local marked={}
  for _,i in ipairs(jumps or {}) do marked[i]=true end
+ -- Identify an entire Abyss descent, including the near-level transition
+ -- in its middle (the previous version resumed walking at point 64).
+ local dropStart,dropEnd
+ if zone=="Abyssal Depth" and direction=="IN" then
+  local bottom,bottomIndex=math.huge,nil
+  for i,cf in ipairs(nodes) do
+   local p=position(cf)
+   if p and p.Y<bottom then bottom,bottomIndex=p.Y,i end
+  end
+  if bottomIndex and bottom<-220 then
+   for i=2,bottomIndex do
+    local a,b=position(nodes[i-1]),position(nodes[i])
+    if a and b and a.Y-b.Y>4 and a.Y>bottom+45 then
+     dropStart=i
+     break
+    end
+   end
+   if dropStart then
+    -- End only when samples reach the lower floor, not whenever a
+    -- single sample happens to be near-level or briefly horizontal.
+    for i=dropStart,#nodes do
+     local p=position(nodes[i])
+     local nextPos=i<#nodes and position(nodes[i+1]) or nil
+     if p and p.Y<=bottom+4 and
+       (not nextPos or math.abs(nextPos.Y-p.Y)<4) then
+      dropEnd=i
+      break
+     end
+    end
+    dropEnd=dropEnd or bottomIndex
+    log(string.format("ABYSS DESCENT SEGMENT: %d-%d bottomY=%.1f",
+     dropStart,dropEnd,bottom))
+   end
+  end
+ end
  for i,cf in ipairs(nodes) do
   if not live() then return false,"stopped" end
   if not healthy() then return false,"died" end
@@ -390,8 +436,11 @@ local function runRoute(nodes,jumps,zone,direction)
    task.wait(.12)
   end
   local ok,err
-  if direction=="IN" and vertical and pos.Y<prev.Y then
-   -- If already below this in-air point, don't try to walk back upward.
+  if direction=="IN" and
+    ((dropStart and i>=dropStart and i<=dropEnd) or
+      (not dropStart and vertical and pos.Y<prev.Y)) then
+   -- Keep the entire descent in gravity/steering mode, including the
+   -- lateral movement between its upper and lower shafts.
    ok,err=descendTo(pos,i)
    if not ok then
     return false,string.format("DROP point %d/%d: %s",i,#nodes,tostring(err))
