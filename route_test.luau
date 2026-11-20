@@ -94,9 +94,15 @@ local function moveTo(pos,range,maxTime,jump)
   local distance=(r.Position-pos).Magnitude
   if distance<=range then return true end
   if (r.Position-last).Magnitude>1.1 then last=r.Position;unchanged=os.clock() end
-  if os.clock()-unchanged>1.35 then
-   h.Jump=true
+  if os.clock()-unchanged>.85 then
+   if jump then
+    h.Jump=true
+    pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+   end
    h:MoveTo(pos)
+   if os.clock()-t>1.6 then
+    return false,string.format("stalled at %.1f studs",distance)
+   end
    unchanged=os.clock()
   end
   task.wait(.12)
@@ -116,7 +122,7 @@ local function pathFallback(pos)
  end
  for _,node in ipairs(path:GetWaypoints()) do
   if not live() then return false,"cancelled" end
-  local ok,err=moveTo(node.Position,6,5,node.Action==Enum.PathWaypointAction.Jump)
+  local ok,err=moveTo(node.Position,6,3,node.Action==Enum.PathWaypointAction.Jump)
   if not ok then return false,err end
  end
  return true
@@ -139,7 +145,7 @@ local function visit(pos,jump)
  -- character is within the ordinary 7-stud checkpoint radius.
  if jump then forceJump(pos,"recorded target") end
  if dist<7 then return true end
- local maxTime=math.clamp(dist/math.max(humanoid().WalkSpeed,8)*2.5+2,3,14)
+ local maxTime=math.clamp(dist/math.max(humanoid().WalkSpeed,8)*1.65+1,2.0,7)
  local ok,err=moveTo(pos,6,maxTime,jump)
  if ok then return true end
  if not healthy() then return false,"died" end
@@ -154,7 +160,7 @@ local function visit(pos,jump)
   for attempt=1,3 do
    if not healthy() or not live() then break end
    forceJump(pos,"ledge retry "..attempt)
-   local did=moveTo(pos,6,2.3,true)
+   local did=moveTo(pos,6,1.6,true)
    if did then return true end
   end
  end
