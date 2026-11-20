@@ -1998,6 +1998,43 @@ function S.resolveDredgeDigWater(zoneName)
     local p=S.presets[zoneName]
     local dig=p and S.unpackCF(p.dig)
     local water=p and S.unpackCF(p.water)
+    -- The original Azuralite DIG spot overlaps the shoreline. Offset it
+    -- further inland, away from the saved WATER point, while leaving the
+    -- water position and recorded route unchanged. The existing recovery
+    -- will still try other dry positions if Collect doesn't increase Fill.
+    if zoneName=="Azuralite Oasis" and dig and water then
+        local delta=dig.Position-water.Position
+        local away=Vector3.new(delta.X,0,delta.Z)
+        if away.Magnitude>.5 and away.Magnitude<16 then
+            local inward=away.Unit
+            local origin=dig.Position
+            local rays=RaycastParams.new()
+            rays.FilterType=Enum.RaycastFilterType.Exclude
+            rays.FilterDescendantsInstances={P.Character}
+            rays.IgnoreWater=false
+            for _,extra in ipairs({12,16,20,24}) do
+                local candidate=origin+inward*extra
+                local hit=workspace:Raycast(
+                    Vector3.new(candidate.X,origin.Y+20,candidate.Z),
+                    Vector3.new(0,-65,0),rays)
+                if hit and hit.Material~=Enum.Material.Water and
+                    math.abs(hit.Position.Y-origin.Y)<12 then
+                    local newPos=Vector3.new(candidate.X,hit.Position.Y+3,
+                        candidate.Z)
+                    local fromWater=(Vector3.new(
+                        newPos.X-water.Position.X,0,
+                        newPos.Z-water.Position.Z)).Magnitude
+                    if fromWater>=15 then
+                        dig=CFrame.new(newPos)
+                        S.diagEvent("AZURALITE_DIG_INLAND",string.format(
+                            "extra=%d waterDist=%.1f dig=(%.1f,%.1f,%.1f)",
+                            extra,fromWater,newPos.X,newPos.Y,newPos.Z))
+                        break
+                    end
+                end
+            end
+        end
+    end
     if zoneName=="Fortune River" and p then
         local built=S.defaultPresets[zoneName]
         local goodDig=built and S.unpackCF(built.dig)
