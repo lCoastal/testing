@@ -8,6 +8,7 @@ local UIS = game:GetService("UserInputService")
 local RS = game:GetService("ReplicatedStorage")
 local HttpService = game:GetService("HttpService")
 local PathfindingService = game:GetService("PathfindingService")
+local RunService = game:GetService("RunService")
 local E = getgenv()
 -- Reduce Output spam by default. Enable verbose logging before running Beta:
 -- getgenv().GalaxisDebugOutput = true
@@ -56,6 +57,22 @@ local S={alive=true,running=false,token=0,cycles=0,dig=nil,water=nil,sell=true,s
     sellQueue={},lastQueuedCycle=0,panFirstRejects=0,panReadyDelay=0}
 local L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false,logFile=FILE}
 S.DIAG_LOG={}
+-- 1-second FPS window: one Heartbeat connection, zero per-frame allocations.
+-- This estimates rendering/game-loop health, not the cause of a slowdown.
+S.perfFPS=0
+S.perfFrameMs=0
+local perfCount,perfSeconds,perfElapsed=0,0,0
+local perfConnection
+perfConnection=RunService.Heartbeat:Connect(function(dt)
+    perfCount+=1
+    perfSeconds+=dt
+    perfElapsed+=dt
+    if perfElapsed>=1 then
+        S.perfFPS=perfSeconds>0 and perfCount/perfSeconds or 0
+        S.perfFrameMs=perfCount>0 and perfSeconds/perfCount*1000 or 0
+        perfCount,perfSeconds,perfElapsed=0,0,0
+    end
+end)
 -- TEMPORARY action trace. File I/O is batched in its own worker.
 S.actionTraceEnabled=true
 S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..".txt"
@@ -772,6 +789,49 @@ local function requirePanEquipped(r,id)
     end
     return valid(id) and r.tool.Parent==character
 end
+-- Auto Farm / Auto Dredge pan watchdog: enforce a held pan throughout
+-- travel, planning and long remote waits, not just at cycle boundaries.
+-- It sleeps when idle and never interrupts the short flare activation.
+task.spawn(function()
+    local nextAttempt=0
+    while S.alive do
+        task.wait(.45)
+        if S.running and not S.abyssFlareBusy then
+            local held=panTool()
+            if held then
+                S.panWatchLastTool=held.tool
+            elseif os.clock()>=nextAttempt then
+                nextAttempt=os.clock()+.85
+                local character=P.Character
+                local hum=character and character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health>0 then
+                    local candidate=S.panInBackpack()
+                    if candidate and candidate.tool then
+                        local tool=candidate.tool
+                        local bag=P:FindFirstChildOfClass("Backpack")
+                        local remotes=RS:FindFirstChild("Remotes")
+                        local custom=remotes and remotes:FindFirstChild("CustomBackpack")
+                        local equip=custom and custom:FindFirstChild("EquipRemote")
+                        if equip and equip:IsA("RemoteEvent") then
+                            pcall(function() equip:FireServer(tool) end)
+                        end
+                        if bag and tool.Parent==bag then
+                            pcall(function() hum:EquipTool(tool) end)
+                        end
+                        if tool.Parent==character then
+                            S.panWatchLastTool=tool
+                            S.diagEvent("PAN_WATCHDOG_EQUIPPED",tool.Name)
+                        else
+                            -- A custom inventory may take a moment to replicate
+                            -- the equip. Retry only after the bounded interval.
+                            S.panWatchLastTool=tool
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
 local function move(cf,id)
     if typeof(cf)~="CFrame" then
         S.diagEvent("MOVE_MISSING_POSITION",
@@ -2502,6 +2562,7 @@ local function maintainAbyssFlare(id)
             "EquipRemote sent for "..candidate.Name.." but no held pan confirmed")
     end
 
+    S.abyssFlareBusy=true
     local ok,err=pcall(function()
         S.diagEvent("ABYSS_ITEM_EQUIP_REQUEST",item.Name)
         equip:FireServer(item)
@@ -2546,6 +2607,7 @@ local function maintainAbyssFlare(id)
     -- Never leave the consumable selected when farming resumes.
     local restored,why=pcall(restorePan)
     if not restored then S.diagEvent("ABYSS_PAN_RESTORE_ERROR",tostring(why)) end
+    S.abyssFlareBusy=false
 end
 local function dredgeCycle(id)
     if not valid(id) or not S.dredge then return false end
@@ -3575,10 +3637,16 @@ S.mineralFileLabel.TextWrapped=true
 S.liveInfo=label("Log writes automatically. Copy report for support.",14,385,312,25,10,MUTED)
 relocate(S.liveInfo,livePage,14,385)
 S.liveInfo.TextWrapped=true
+S.perfLabel=label("FPS: measuring... | Frame: measuring...",14,413,312,23,11,FG)
+relocate(S.perfLabel,livePage,14,413)
 bind(S.liveCopyButton.MouseButton1Click,function()
     S.liveDebugRecord("MANUAL_EXPORT",S.liveDebugDetails())
     S.flushLiveDebug()
-    local report=S.diagReport().."\n--- LIVE DEBUG RECENT ---\n"..
+    local report=string.format(
+        "PERFORMANCE: FPS %.1f | average frame %.1fms | Auto mode %s\\n",
+        S.perfFPS or 0,S.perfFrameMs or 0,
+        S.running and (S.dredge and "DREDGE" or "FARM") or "OFF")..
+        S.diagReport().."\n--- LIVE DEBUG RECENT ---\n"..
         table.concat(S.liveDebugRecent)
     local copied=false
     if type(setclipboard)=="function" then copied=pcall(setclipboard,report) end
@@ -3590,6 +3658,8 @@ end)
 task.spawn(function()
     while S.alive do
         if livePage.Visible then
+            S.perfLabel.Text=string.format("FPS: %.1f | Frame: %.1f ms | Auto: %s",
+                S.perfFPS or 0,S.perfFrameMs or 0,S.running and "ON" or "OFF")
             S.mineralFileLabel.Text="MINERAL LOG: "..FILE
             local action=S.traceCurrentAction or "Idle / no active action"
             local age=S.traceActionStartedAt and
@@ -3818,6 +3888,7 @@ local function close()
     S.liveDebugRecord("CLOSE",S.liveDebugDetails())
     S.flushLiveDebug()
     S.alive=false
+    if perfConnection then perfConnection:Disconnect();perfConnection=nil end
     for _,c in ipairs(S.links) do pcall(function() c:Disconnect() end) end
     G:Destroy()
     if E.CoastalSafeFarm==S then E.CoastalSafeFarm=nil end
