@@ -1693,10 +1693,13 @@ end
 local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local p=S.presets[zoneName]
     local recordedOutbound=reverse and p and p.routeOut and #p.routeOut>=2
-    if reverse and zoneName=="Abyssal Depth" and not recordedOutbound then
-        S.diagEvent("ABYSS_OUTBOUND_MISSING",
-            "Recorded routeOut missing. Refusing old inbound-reverse fallback; verify GalaxisHub_ZonePresets.json")
-        return false,"Abyssal Depth routeOut recording missing; old reverse route disabled"
+    if reverse and zoneName=="Abyssal Depth" and
+        (not recordedOutbound or #p.routeOut<50) then
+        local count=p and p.routeOut and #p.routeOut or 0
+        S.diagEvent("ABYSS_OUTBOUND_MISSING",string.format(
+            "Expected dense 61-point recorded routeOut; got %d. Refusing old path.",count))
+        return false,"Abyss outbound path incomplete ("..count..
+            " checkpoints; expected ~61). Will not replay old path."
     end
     local nodes=recordedOutbound and p.routeOut or (p and p.route or {})
     local isReverse=reverse and not recordedOutbound
@@ -1933,6 +1936,29 @@ local function returnToMappedStone(id)
     local oldZone=S.dredgeAt
     if not oldZone then return true end
     local p=S.presets[oldZone]
+    -- Abyss must use the dense, tested 61-point outbound recording.
+    -- Reload just this route from disk before departing: a stale embedded
+    -- seven-point preset must never masquerade as the successful route.
+    if oldZone=="Abyssal Depth" then
+        local raw=S.decodePresetFile(PRESET_FILE)
+        local onDisk=raw and raw.zones and
+            S.validPreset(raw.zones["Abyssal Depth"])
+        local count=onDisk and onDisk.routeOut and #onDisk.routeOut or 0
+        S.diagEvent("ABYSS_OUTBOUND_FILE_CHECK",string.format(
+            "file=%s recordedOut=%d loadedOut=%d",
+            PRESET_FILE,count,p and p.routeOut and #p.routeOut or 0))
+        if count<50 then
+            S.diagEvent("ABYSS_OUTBOUND_INVALID",
+                "Missing tested 61-point outbound recording in "..PRESET_FILE)
+            return false,"Abyss exit requires the tested 61-point routeOut in "..
+                PRESET_FILE.." (found "..count.."). No old route fallback."
+        end
+        if not p then p={} S.presets[oldZone]=p end
+        p.routeOut=onDisk.routeOut
+        p.routeOutJumps=onDisk.routeOutJumps
+        S.diagEvent("ABYSS_OUTBOUND_LOADED",
+            string.format("Using %d recorded outbound checkpoints",count))
+    end
     local folder=S.waypointFolder()
     local obj=p and folder and folder:FindFirstChild(p.waypoint or "")
     local stone=obj and S.getWaypointCF(obj)
