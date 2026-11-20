@@ -324,26 +324,45 @@ end
 local function descendTo(pos,pointNo)
  local r=root()
  if not r then return false,"character missing" end
- local horizontal=Vector3.new(pos.X-r.Position.X,0,pos.Z-r.Position.Z).Magnitude
- if horizontal>10 then return false,"too far horizontally from drop: "..math.floor(horizontal) end
  if r.Position.Y<=pos.Y+6 then return true end
  local started=os.clock()
  local startY=r.Position.Y
  local lowest=startY
+ local lastMove=0
+ local maxHorizontal=0
+ -- Send direct MoveTo targets during a descent, NOT a computed walking
+ -- path. Some recordings contain airborne samples 10-20 studs away while
+ -- the player is accelerating off the ledge.
  while live() and os.clock()-started<12 do
   r=root()
   if not healthy() or not r then return false,"died during drop" end
+  local horizontal=Vector3.new(pos.X-r.Position.X,0,pos.Z-r.Position.Z).Magnitude
+  maxHorizontal=math.max(maxHorizontal,horizontal)
   if r.Position.Y<=pos.Y+6 then
-   log(string.format("DROP point %d reached Y %.1f (target %.1f)",pointNo,r.Position.Y,pos.Y))
+   log(string.format("DROP point %d reached Y %.1f (target %.1f) horizontal=%.1f",
+    pointNo,r.Position.Y,pos.Y,horizontal))
    return true
   end
+  -- The input sample can be ahead of the falling avatar. Steer toward it
+  -- without waiting to be exactly at its 3D coordinates.
+  if os.clock()-lastMove>.45 and horizontal>2 then
+   local h=humanoid()
+   if h then h:MoveTo(pos) end
+   lastMove=os.clock()
+  end
   lowest=math.min(lowest,r.Position.Y)
-  if os.clock()-started>4 and lowest>startY-2 then
-   return false,"not falling at vertical checkpoint (still at Y "..math.floor(r.Position.Y)..")"
+  if os.clock()-started>5 and lowest>startY-2 then
+   return false,string.format(
+    "did not descend (Y=%.1f, horizontal=%.1f, maxHorizontal=%.1f)",
+    r.Position.Y,horizontal,maxHorizontal)
+  end
+  if horizontal>65 then
+   return false,string.format("drifted %.1f studs away from descent",horizontal)
   end
   task.wait(.08)
  end
- return false,"drop timeout at point "..pointNo
+ return false,string.format("drop timeout point=%d Y=%.1f targetY=%.1f",
+  pointNo,root() and root().Position.Y or -999,pos.Y)
 end
 local function runRoute(nodes,jumps,zone,direction)
  local marked={}
