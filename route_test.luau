@@ -375,9 +375,55 @@ local function descendTo(pos,pointNo)
  return false,string.format("drop timeout point=%d Y=%.1f targetY=%.1f",
   pointNo,root() and root().Position.Y or -999,pos.Y)
 end
+-- The Azuralite return recording contains repeated takeoff positions and
+-- midair samples between successive marked jumps. Move forward toward the
+-- next takeoff/landing area rather than calling MoveTo on each airborne sample
+-- (which previously pulled the character backward at outbound point 19).
+local function crossJumpArc(nodes,startIndex,endIndex,zone)
+ local startPos=position(nodes[startIndex])
+ local dest=position(nodes[endIndex])
+ if not startPos or not dest then return false,"invalid jump arc positions" end
+ local r=root()
+ if not r then return false,"character missing" end
+ local before=r.Position
+ -- Start the jump while the player is near the marked takeoff; do not
+ -- return to the previous recorded point after we launch.
+ local h=humanoid()
+ if not h then return false,"humanoid missing" end
+ h:MoveTo(dest)
+ forceJump(dest,zone.." takeoff "..startIndex.." -> "..endIndex)
+ local t=os.clock()
+ local best=math.huge
+ local lastJump=os.clock()
+ while live() and os.clock()-t<5.5 do
+  r=root();h=humanoid()
+  if not r or not h or h.Health<=0 then return false,"died" end
+  local horizontal=Vector3.new(r.Position.X-dest.X,0,r.Position.Z-dest.Z).Magnitude
+  best=math.min(best,horizontal)
+  -- The recorded arc can end in another jump. We only need to enter the
+  -- next takeoff area, not match an airborne Y coordinate exactly.
+  if horizontal<=6 and math.abs(r.Position.Y-dest.Y)<=11 then
+   log(string.format("JUMP ARC %s %d->%d reached horizontal=%.1f yDelta=%.1f",
+    zone,startIndex,endIndex,horizontal,r.Position.Y-dest.Y))
+   return true
+  end
+  if os.clock()-lastJump>.5 and h.FloorMaterial~=Enum.Material.Air
+     and horizontal>7 then
+   forceJump(dest,zone.." continuing jump arc")
+   lastJump=os.clock()
+  end
+  h:MoveTo(dest)
+  task.wait(.1)
+ end
+ r=root()
+ local distance=r and Vector3.new(r.Position.X-dest.X,0,r.Position.Z-dest.Z).Magnitude or -1
+ return false,string.format("arc %d->%d missed: remainingXZ=%.1f bestXZ=%.1f",
+  startIndex,endIndex,distance,best)
+end
 local function runRoute(nodes,jumps,zone,direction)
  local marked={}
  for _,i in ipairs(jumps or {}) do marked[i]=true end
+ local skipUntil=0
  -- Identify an entire Abyss descent, including the near-level transition
  -- in its middle (the previous version resumed walking at point 64).
  local dropStart,dropEnd
@@ -414,6 +460,7 @@ local function runRoute(nodes,jumps,zone,direction)
   end
  end
  for i,cf in ipairs(nodes) do
+  if i<=skipUntil then continue end
   if not live() then return false,"stopped" end
   if not healthy() then return false,"died" end
   local pos=position(cf)
@@ -428,8 +475,27 @@ local function runRoute(nodes,jumps,zone,direction)
   local prev=i>1 and position(nodes[i-1]) or nil
   local vertical=prev and prev.Y-pos.Y>5 and
     (Vector3.new(prev.X-pos.X,0,prev.Z-pos.Z)).Magnitude<9
-  -- Recorded jump points mark TAKEOFF, not the landing destination.
-  -- Start the jump toward the next 1-2 checkpoints while grounded.
+  -- Replaying every midair sample makes the avatar turn back, and
+  -- creates an impossible MoveTo toward an apex above jump height.
+  -- In Azuralite OUT, traverse the jump as a continuous forward arc.
+  if zone=="Azuralite Oasis" and direction=="OUT" and marked[i] then
+   local landing=math.min(#nodes,i+6)
+   for nextMarker=i+1,#nodes do
+    if marked[nextMarker] then
+     landing=nextMarker
+     break
+    end
+   end
+   local arcOk,arcErr=crossJumpArc(nodes,i,landing,zone)
+   if not arcOk then
+    return false,string.format("OUT jump arc %d->%d: %s",
+     i,landing,tostring(arcErr))
+   end
+   skipUntil=landing-1
+   log(string.format("JUMP ARC SKIPPED AIRBORNE POINTS %d-%d",i+1,skipUntil))
+   continue
+  end
+  -- Other zones retain their takeoff markers and short airborne routes.
   if marked[i] then
    local ahead=position(nodes[math.min(i+2,#nodes)]) or pos
    forceJump(ahead,zone.." "..direction.." takeoff point "..i)
