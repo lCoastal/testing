@@ -1587,7 +1587,7 @@ end
 -- Replay dense user recordings using direct Humanoid movement first.
 -- Pathfinding remains a fallback for blocked walkable sections. Midair
 -- checkpoints are treated as freefall and marked jump sequences as arcs.
-local function replayPoint(cf,id,markedJump)
+local function replayPoint(cf,id,markedJump,noPathFallback)
     local rr=root()
     local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
     if not rr or not hum or hum.Health<=0 then return false,"Character unavailable" end
@@ -1620,7 +1620,7 @@ local function replayPoint(cf,id,markedJump)
     -- Abyss upper exit is a player-recorded tight route: invoking
     -- PathfindingService here can take the OLD route and stall on
     -- the same cliff/ledge. Let the caller explicitly retry/abort.
-    if S.dredgeAt=="Abyssal Depth" and S.abyssOutboundReplay then
+    if noPathFallback then
         local after=root()
         return false,string.format(
             "recorded outbound checkpoint blocked: %.1f studs away",
@@ -1763,7 +1763,6 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
             (isReverse and "REVERSED_INBOUND" or "RECORDED_ROUTE_IN"),
         #nodes,startIndex))
     if reverse and zoneName=="Abyssal Depth" then
-        S.abyssOutboundReplay=true
         S.diagEvent("ABYSS_OUTBOUND_ACTIVE",string.format(
             "recorded=%d start=%d end=%d",#nodes,startIndex,#nodes))
     end
@@ -1823,7 +1822,8 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
                         task.wait(.12)
                     end
                 end
-                ok,err=replayPoint(cf,id,jumps[index])
+                ok,err=replayPoint(cf,id,jumps[index],
+                    recordedOutbound and zoneName=="Abyssal Depth")
             end
             if not ok then
                 S.diagEvent("WALK_CHECKPOINT_ERROR",
@@ -1832,9 +1832,6 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
                     ": "..tostring(err)
             end
         end
-    end
-    if reverse and zoneName=="Abyssal Depth" then
-        S.abyssOutboundReplay=false
     end
     S.diagEvent("WALK_ROUTE_END",zoneName..
         (reverse and " -> warp" or " -> dig")..
