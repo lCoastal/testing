@@ -989,12 +989,42 @@ local function totemNear(pos)
     end
     return false
 end
+-- Restore the waypoint mapping omitted from the bundled 28-zone JSON.
+-- The first inbound checkpoint was recorded at the departure stone; use
+-- the physical stone nearest that point, never the current player position.
+-- This does NOT alter any route, dig or water coordinate.
+local function resolveDredgeWaypoint(zone)
+    local preset=S.presets[zone]
+    if not preset then return nil end
+    if waypointIndex[preset.waypoint or ""] then return preset.waypoint end
+    local entry=preset.route and preset.route[1]
+    local cf=entry and S.unpackCF(entry)
+    local folder=S.waypointFolder()
+    if not cf or not folder then return nil end
+    local best,bestDist=nil,math.huge
+    for _,name in ipairs(WAYPOINT_NAMES) do
+        local obj=folder:FindFirstChild(name)
+        local stone=obj and S.getWaypointCF(obj)
+        if stone then
+            local d=(stone.Position-cf.Position).Magnitude
+            if d<bestDist then best,bestDist=name,d end
+        end
+    end
+    -- A missing/misaligned stone should never trigger blind travel.
+    if best and bestDist<=120 then
+        preset.waypoint=best
+        S.diagEvent("DREDGE_WAYPOINT_RESOLVED",
+            string.format("%s -> %s (%.1f studs)",zone,best,bestDist))
+        return best
+    end
+    return nil
+end
 local function eligible(z,tier)
     if z:find("inside Firefly Zones",1,true) then return false end
     local base=baseDrop(z)
     local preset=S.presets[base]
     if not zoneIndex[base] or not preset or not S.unpackCF(preset.dig)
-        or not S.unpackCF(preset.water) or not waypointIndex[preset.waypoint or ""] then return false end
+        or not S.unpackCF(preset.water) or not resolveDredgeWaypoint(base) then return false end
     if base=="The Void" or base=="Haunted Creek" or base=="North Pole"
         or base=="Seashell Beach" or base:find("Tomb Vein",1,true) then return false end
     -- Magma Furnace is a permanent deposit. It has its own saved route
