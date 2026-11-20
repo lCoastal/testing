@@ -121,15 +121,44 @@ local function pathFallback(pos)
  end
  return true
 end
+local function forceJump(target,reason)
+ local h=humanoid()
+ if not h or h.Health<=0 then return false end
+ h.Jump=true
+ pcall(function() h:ChangeState(Enum.HumanoidStateType.Jumping) end)
+ if target then h:MoveTo(target) end
+ log("JUMP "..tostring(reason).." | state="..tostring(h:GetState())
+  .." jumpPower="..tostring(h.JumpPower)
+  .." jumpHeight="..tostring(h.JumpHeight))
+ return true
+end
 local function visit(pos,jump)
  if not healthy() then return false,"died" end
  local r=root();local dist=(r.Position-pos).Magnitude
+ -- A jump checkpoint must not be silently skipped just because the
+ -- character is within the ordinary 7-stud checkpoint radius.
+ if jump then forceJump(pos,"recorded target") end
  if dist<7 then return true end
- local ok,err=moveTo(pos,6,math.clamp(dist/math.max(humanoid().WalkSpeed,8)*2.5+2,3,14),jump)
+ local maxTime=math.clamp(dist/math.max(humanoid().WalkSpeed,8)*2.5+2,3,14)
+ local ok,err=moveTo(pos,6,maxTime,jump)
  if ok then return true end
  if not healthy() then return false,"died" end
  local repath,why=pathFallback(pos)
- return repath,repath and nil or (err.." / "..tostring(why))
+ if repath then return true end
+ -- Recorded upward transitions sometimes require a real manual jump
+ -- while pathfinding is unable to plan onto the higher ledge.
+ local rr=root()
+ if rr and pos.Y-rr.Position.Y>1.5 and pos.Y-rr.Position.Y<13
+   and Vector3.new(pos.X-rr.Position.X,0,pos.Z-rr.Position.Z).Magnitude<16 then
+  log("LEDGE JUMP RETRY | yDelta="..string.format("%.1f",pos.Y-rr.Position.Y))
+  for attempt=1,3 do
+   if not healthy() or not live() then break end
+   forceJump(pos,"ledge retry "..attempt)
+   local did=moveTo(pos,6,2.3,true)
+   if did then return true end
+  end
+ end
+ return false,err.." / "..tostring(why)
 end
 local function triggerPrompt(prompt)
  if not prompt or not prompt:IsA("ProximityPrompt") then return false,"prompt missing" end
@@ -334,6 +363,13 @@ local function runRoute(nodes,jumps,zone,direction)
   local prev=i>1 and position(nodes[i-1]) or nil
   local vertical=prev and prev.Y-pos.Y>5 and
     (Vector3.new(prev.X-pos.X,0,prev.Z-pos.Z)).Magnitude<9
+  -- Recorded jump points mark TAKEOFF, not the landing destination.
+  -- Start the jump toward the next 1-2 checkpoints while grounded.
+  if marked[i] then
+   local ahead=position(nodes[math.min(i+2,#nodes)]) or pos
+   forceJump(ahead,zone.." "..direction.." takeoff point "..i)
+   task.wait(.12)
+  end
   local ok,err
   if direction=="IN" and vertical and pos.Y<prev.Y then
    -- If already below this in-air point, don't try to walk back upward.
