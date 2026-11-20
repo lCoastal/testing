@@ -1998,38 +1998,67 @@ function S.resolveDredgeDigWater(zoneName)
     local p=S.presets[zoneName]
     local dig=p and S.unpackCF(p.dig)
     local water=p and S.unpackCF(p.water)
-    -- The original Azuralite DIG spot overlaps the shoreline. Offset it
-    -- further inland, away from the saved WATER point, while leaving the
-    -- water position and recorded route unchanged. The existing recovery
-    -- will still try other dry positions if Collect doesn't increase Fill.
+    -- Azuralite's first inland offset was beside a large crystal.
+    -- Search to the SIDE of that offset (not further into the crystal).
+    -- Accept only ground at the expected floor level with standing clearance.
     if zoneName=="Azuralite Oasis" and dig and water then
-        local delta=dig.Position-water.Position
+        local origin=dig.Position
+        local delta=origin-water.Position
         local away=Vector3.new(delta.X,0,delta.Z)
-        if away.Magnitude>.5 and away.Magnitude<16 then
-            local inward=away.Unit
-            local origin=dig.Position
+        if away.Magnitude>.5 and away.Magnitude<18 then
+            local inland=away.Unit
+            local sideways=Vector3.new(-inland.Z,0,inland.X)
             local rays=RaycastParams.new()
             rays.FilterType=Enum.RaycastFilterType.Exclude
             rays.FilterDescendantsInstances={P.Character}
             rays.IgnoreWater=false
-            for _,extra in ipairs({12,16,20,24}) do
-                local candidate=origin+inward*extra
+            local overlap=OverlapParams.new()
+            overlap.FilterType=Enum.RaycastFilterType.Exclude
+            overlap.FilterDescendantsInstances={P.Character}
+            overlap.MaxParts=50
+            local offsets={
+                {12,12},{12,17},{16,12},{16,17},
+                {12,-12},{12,-17},{16,-12},{16,-17},
+                {20,16},{20,-16}
+            }
+            for _,offset in ipairs(offsets) do
+                local advance,lateral=offset[1],offset[2]
+                local candidate=origin+inland*advance+sideways*lateral
+                -- A short top-down ray finds the actual floor, not a crystal
+                -- several studs above the ground.
                 local hit=workspace:Raycast(
-                    Vector3.new(candidate.X,origin.Y+20,candidate.Z),
-                    Vector3.new(0,-65,0),rays)
+                    Vector3.new(candidate.X,origin.Y+7,candidate.Z),
+                    Vector3.new(0,-21,0),rays)
                 if hit and hit.Material~=Enum.Material.Water and
-                    math.abs(hit.Position.Y-origin.Y)<12 then
-                    local newPos=Vector3.new(candidate.X,hit.Position.Y+3,
-                        candidate.Z)
-                    local fromWater=(Vector3.new(
-                        newPos.X-water.Position.X,0,
-                        newPos.Z-water.Position.Z)).Magnitude
-                    if fromWater>=15 then
-                        dig=CFrame.new(newPos)
-                        S.diagEvent("AZURALITE_DIG_INLAND",string.format(
-                            "extra=%d waterDist=%.1f dig=(%.1f,%.1f,%.1f)",
-                            extra,fromWater,newPos.X,newPos.Y,newPos.Z))
-                        break
+                    hit.Normal.Y>.7 and
+                    math.abs(hit.Position.Y-(origin.Y-3))<8 then
+                    local groundObject=hit.Instance
+                    local name=groundObject and groundObject.Name:lower() or ""
+                    if not name:find("crystal",1,true) and
+                        not name:find("ore",1,true) and
+                        not name:find("mineral",1,true) then
+                        local stand=hit.Position+Vector3.new(0,3,0)
+                        local blocked=false
+                        local nearby=workspace:GetPartBoundsInBox(
+                            CFrame.new(stand),Vector3.new(4,5,4),overlap)
+                        for _,part in ipairs(nearby) do
+                            if part.CanCollide and part~=groundObject then
+                                blocked=true
+                                break
+                            end
+                        end
+                        local distWater=Vector3.new(
+                            stand.X-water.Position.X,0,
+                            stand.Z-water.Position.Z).Magnitude
+                        if not blocked and distWater>=15 then
+                            dig=CFrame.new(stand)
+                            S.diagEvent("AZURALITE_DIG_SIDE_SHIFT",
+                                string.format(
+                                    "inland=%d sideways=%d waterDist=%.1f pos=(%.1f,%.1f,%.1f)",
+                                    advance,lateral,distWater,
+                                    stand.X,stand.Y,stand.Z))
+                            break
+                        end
                     end
                 end
             end
