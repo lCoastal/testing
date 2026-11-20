@@ -1617,7 +1617,15 @@ local function replayPoint(cf,id,markedJump)
         task.wait(.10)
     end
     if not valid(id) then return false,"Stopped" end
-    -- Preserve the existing persistent pathfinding recovery.
+    -- Abyss upper exit is a player-recorded tight route: invoking
+    -- PathfindingService here can take the OLD route and stall on
+    -- the same cliff/ledge. Let the caller explicitly retry/abort.
+    if S.dredgeAt=="Abyssal Depth" and S.abyssOutboundReplay then
+        local after=root()
+        return false,string.format(
+            "recorded outbound checkpoint blocked: %.1f studs away",
+            after and (after.Position-cf.Position).Magnitude or -1)
+    end
     return walkRoute(cf,id,1800,true)
 end
 local function replayJumpArc(nodes,first,last,id,zone)
@@ -1685,6 +1693,11 @@ end
 local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local p=S.presets[zoneName]
     local recordedOutbound=reverse and p and p.routeOut and #p.routeOut>=2
+    if reverse and zoneName=="Abyssal Depth" and not recordedOutbound then
+        S.diagEvent("ABYSS_OUTBOUND_MISSING",
+            "Recorded routeOut missing. Refusing old inbound-reverse fallback; verify GalaxisHub_ZonePresets.json")
+        return false,"Abyssal Depth routeOut recording missing; old reverse route disabled"
+    end
     local nodes=recordedOutbound and p.routeOut or (p and p.route or {})
     local isReverse=reverse and not recordedOutbound
     local jumpIndices=recordedOutbound and p.routeOutJumps
@@ -1744,8 +1757,16 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
         end
     end
     S.diagEvent("WALK_ROUTE_START",string.format(
-        "zone=%s direction=%s checkpoints=%d start=%d",
-        tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
+        "zone=%s direction=%s source=%s checkpoints=%d start=%d",
+        tostring(zoneName),reverse and "to warp" or "to sand",
+        recordedOutbound and "RECORDED_ROUTE_OUT" or
+            (isReverse and "REVERSED_INBOUND" or "RECORDED_ROUTE_IN"),
+        #nodes,startIndex))
+    if reverse and zoneName=="Abyssal Depth" then
+        S.abyssOutboundReplay=true
+        S.diagEvent("ABYSS_OUTBOUND_ACTIVE",string.format(
+            "recorded=%d start=%d end=%d",#nodes,startIndex,#nodes))
+    end
     local steps=isReverse and startIndex or
         (recordedOutbound and (#nodes-startIndex+1) or #nodes)
     local skipUntil=0
@@ -1758,6 +1779,13 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
         if cf then
             local rr=root()
             if not rr then return false,"Character missing" end
+            if recordedOutbound and zoneName=="Abyssal Depth" and
+                (index==startIndex or index%10==0 or index==#nodes) then
+                S.diagEvent("ABYSS_OUTBOUND_POINT",string.format(
+                    "point=%d/%d distance=%.1f posY=%.1f targetY=%.1f",
+                    index,#nodes,(rr.Position-cf.Position).Magnitude,
+                    rr.Position.Y,cf.Position.Y))
+            end
             -- Azuralite's five outbound jump arcs must be traveled
             -- continuously; stopping at airborne frames causes backtracking.
             if recordedOutbound and zoneName=="Azuralite Oasis" and jumps[index] then
@@ -1804,6 +1832,9 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
                     ": "..tostring(err)
             end
         end
+    end
+    if reverse and zoneName=="Abyssal Depth" then
+        S.abyssOutboundReplay=false
     end
     S.diagEvent("WALK_ROUTE_END",zoneName..
         (reverse and " -> warp" or " -> dig")..
@@ -1945,6 +1976,10 @@ local function returnToMappedStone(id)
             return false,"No upper checkpoints after Abyss rope"
         end
         reverseStartIndex=nearestIndex
+        S.diagEvent("ABYSS_UPPER_ROUTE_SOURCE",
+            (p.routeOut and #p.routeOut>=2) and
+            ("RECORDED_ROUTE_OUT nodes="..#p.routeOut) or
+            "MISSING_OUTBOUND: old reverse path disabled")
         S.diagEvent("ABYSS_UPPER_ROUTE",string.format(
             "after rope pos=%.1f,%.1f,%.1f | nearest=%d/%d dist=%.1f",
             rr.Position.X,rr.Position.Y,rr.Position.Z,
