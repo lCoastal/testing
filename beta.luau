@@ -2357,15 +2357,18 @@ local function maintainAbyssFlare(id)
     local now=os.clock()
     if now<(S.abyssFlareNextCheck or 0) then return end
     S.abyssFlareNextCheck=now+5
-    if S.nearbyFireflyFlare() then
+    -- First arrival: reuse an existing nearby flare, if present.
+    -- Otherwise activate immediately. Refresh every 570 seconds while
+    -- stationed in Abyssal Depth, even when the older visual persists.
+    local nextThrow=S.abyssFlareNextThrowAt
+    if not nextThrow and S.nearbyFireflyFlare() then
         S.abyssFlareLastSeen=now
+        S.abyssFlareNextThrowAt=now+570
+        S.diagEvent("ABYSS_FLARE_EXISTING",
+            "Existing flare; refresh scheduled in 570s")
         return
     end
-    -- Never burn more consumables because placed-flare detection failed.
-    -- One successful activation per Abyss visit, plus a 10-minute cooldown
-    -- across visits/restarts within the same running UI.
-    if S.abyssFlareThrownThisVisit then return end
-    if now<(S.abyssFlareLastThrowAt or -math.huge)+600 then return end
+    if nextThrow and now<nextThrow then return end
     if now<(S.abyssFlareNextAttempt or 0) then return end
     local c=P.Character
     local b2=P:FindFirstChild("BackpackTwo")
@@ -2459,19 +2462,19 @@ local function maintainAbyssFlare(id)
             S.diagEvent(sent and "ABYSS_FLARE_ACTIVATE_SENT"
                 or "ABYSS_FLARE_ACTIVATE_ERROR",sent and "Tool:Activate" or tostring(why))
             if sent then
-                S.abyssFlareThrownThisVisit=true
                 S.abyssFlareLastThrowAt=os.clock()
-                S.abyssFlareNextAttempt=os.clock()+600
-                S.diagEvent("ABYSS_FLARE_LIMIT",
-                    "One activation this visit; 600s minimum between throws")
+                S.abyssFlareNextThrowAt=S.abyssFlareLastThrowAt+570
+                S.abyssFlareNextAttempt=S.abyssFlareNextThrowAt
+                S.diagEvent("ABYSS_FLARE_SCHEDULED",
+                    "Flare activated; refresh in 570s if still in Abyss")
             end
             task.wait(.35)
             if S.nearbyFireflyFlare() then
                 S.diagEvent("ABYSS_FLARE_CONFIRMED","Lit flare detected")
-                S.abyssFlareNextAttempt=os.clock()+600
+                S.abyssFlareNextAttempt=S.abyssFlareNextThrowAt or os.clock()+570
             else
                 S.diagEvent("ABYSS_FLARE_UNCONFIRMED","No placed flare detected")
-                S.abyssFlareNextAttempt=os.clock()+600
+                S.abyssFlareNextAttempt=S.abyssFlareNextThrowAt or os.clock()+570
             end
         else
             S.diagEvent("ABYSS_FLARE_NOT_HELD","EquipRemote sent; Tool not held")
@@ -2795,7 +2798,9 @@ local function dredgeCycle(id)
         S.dredgeWarped[targetZone]=nil
         S.dredgeTravelFailed[targetZone]=nil
         if targetZone=="Abyssal Depth" then
-            S.abyssFlareThrownThisVisit=false
+            S.abyssFlareNextThrowAt=nil
+            S.abyssFlareNextAttempt=nil
+            S.abyssFlareNextCheck=nil
         end
         S.dredgeAt=targetZone
         S.dredgeZoneSince=os.clock()
