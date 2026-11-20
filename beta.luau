@@ -1801,14 +1801,23 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
         return false,"Abyss outbound path incomplete ("..count..
             " checkpoints; expected ~61). Will not replay old path."
     end
-    local nodes=recordedOutbound and p.routeOut or (p and p.route or {})
-    local isReverse=reverse and not recordedOutbound
-    local jumpIndices=recordedOutbound and p.routeOutJumps
+    -- Enchanted's recorded inbound points 3-9 form an airborne shortcut.
+    -- The server repeatedly corrects the avatar downward at point 5.
+    -- Its separate 40-point outbound corridor is a genuine ground route;
+    -- traverse that SAME recording backwards when entering the ruins.
+    -- Keep both original recordings and every coordinate unchanged.
+    local enchantedInbound=not reverse and zoneName=="Enchanted Ruins"
+        and p and p.routeOut and #p.routeOut>=30
+    local nodes=(recordedOutbound or enchantedInbound) and p.routeOut
+        or (p and p.route or {})
+    local isReverse=(reverse and not recordedOutbound) or enchantedInbound
+    local jumpIndices=(recordedOutbound or enchantedInbound) and p.routeOutJumps
         or (p and p.routeJumps)
     local jumps={}
     for _,j in ipairs(jumpIndices or {}) do jumps[j]=true end
-    local startIndex=isReverse and math.clamp(reverseStartIndex or #nodes,1,
-        math.max(1,#nodes)) or 1
+    local startIndex=isReverse and math.clamp(
+        enchantedInbound and #nodes or reverseStartIndex or #nodes,
+        1,math.max(1,#nodes)) or 1
     if recordedOutbound and zoneName=="Abyssal Depth" then
         local rr=root()
         if rr then
@@ -1862,8 +1871,9 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     S.diagEvent("WALK_ROUTE_START",string.format(
         "zone=%s direction=%s source=%s checkpoints=%d start=%d",
         tostring(zoneName),reverse and "to warp" or "to sand",
-        recordedOutbound and "RECORDED_ROUTE_OUT" or
-            (isReverse and "REVERSED_INBOUND" or "RECORDED_ROUTE_IN"),
+        enchantedInbound and "REVERSED_RECORDED_OUTBOUND" or
+        (recordedOutbound and "RECORDED_ROUTE_OUT" or
+            (isReverse and "REVERSED_INBOUND" or "RECORDED_ROUTE_IN")),
         #nodes,startIndex))
     if reverse and zoneName=="Abyssal Depth" then
         S.diagEvent("ABYSS_OUTBOUND_ACTIVE",string.format(
