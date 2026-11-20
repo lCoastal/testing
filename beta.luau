@@ -3189,8 +3189,8 @@ local function rounded(o)
     return o
 end
 local W=rounded(make("Frame",{
-    Size=UDim2.fromOffset(340,463),
-    Position=UDim2.new(.5,-170,.5,-231),
+    Size=UDim2.fromOffset(340,540),
+    Position=UDim2.new(.5,-170,.5,-270),
     BackgroundColor3=BG,BorderSizePixel=0,Active=true
 },G))
 make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
@@ -3466,10 +3466,6 @@ relocate(routeCountLabel,S.presetEditor,4,425)
 S.routeMode="INBOUND"
 S.routeModeButton=button("DIRECTION: TO DEPOSIT",4,465,312,34,S.presetEditor)
 S.routeRecordButton=button("START WALK RECORDING",4,507,312,36,S.presetEditor)
-S.routeRecordHint=label(
-    "Walk naturally. Records every 4 studs, jumps and turns. Stop to save.",
-    4,552,306,56,10,MUTED)
-S.routeRecordHint.TextWrapped=true
 S.refreshPreset()
 S.editPresets.MouseButton1Click:Connect(function()
     S.presetEditor.Visible=not S.presetEditor.Visible
@@ -4682,7 +4678,7 @@ local minimized=false
 bind(Min.MouseButton1Click,function()
     minimized=not minimized
     Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,463)
+    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,540)
     Min.Text=minimized and "+" or "−"
 end)
 local dragging=false
