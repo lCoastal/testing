@@ -1556,8 +1556,104 @@ local function approachStone(stone,id,stoneName)
     end
     return false,"Could not approach warp stone: "..lastError
 end
--- Traverse optionally recorded coarse checkpoints (stone -> dig).
--- Reversing the same list returns the avatar to the fast-travel stone.
+-- Replay dense user recordings using direct Humanoid movement first.
+-- Pathfinding remains a fallback for blocked walkable sections. Midair
+-- checkpoints are treated as freefall and marked jump sequences as arcs.
+local function replayPoint(cf,id,markedJump)
+    local rr=root()
+    local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+    if not rr or not hum or hum.Health<=0 then return false,"Character unavailable" end
+    if markedJump then
+        hum.Jump=true
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    end
+    local dist=(rr.Position-cf.Position).Magnitude
+    if dist<=7 then return true end
+    hum:MoveTo(cf.Position)
+    local since=os.clock()
+    local deadline=since+math.clamp(dist/math.max(8,hum.WalkSpeed)*1.65+1,2,7)
+    local lastPos=rr.Position
+    local lastProgress=os.clock()
+    while valid(id) and os.clock()<deadline do
+        rr=root()
+        if not rr or hum.Health<=0 then return false,"Character died" end
+        if (rr.Position-cf.Position).Magnitude<=6 then return true end
+        if (rr.Position-lastPos).Magnitude>1.1 then
+            lastPos=rr.Position
+            lastProgress=os.clock()
+        elseif os.clock()-lastProgress>.85 then
+            S.diagEvent("ROUTE_REPLAY_STALL",
+                string.format("distance=%.1f", (rr.Position-cf.Position).Magnitude))
+            break
+        end
+        task.wait(.10)
+    end
+    if not valid(id) then return false,"Stopped" end
+    -- Preserve the existing persistent pathfinding recovery.
+    return walkRoute(cf,id,1800,true)
+end
+local function replayJumpArc(nodes,first,last,id,zone)
+    local dest=S.unpackCF(nodes[last])
+    if not dest then return false,"Jump destination missing" end
+    local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+    if not hum or hum.Health<=0 then return false,"Character unavailable" end
+    hum:MoveTo(dest.Position)
+    hum.Jump=true
+    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+    local started=os.clock()
+    local lastJump=started
+    while valid(id) and os.clock()-started<5.5 do
+        local rr=root()
+        if not rr or hum.Health<=0 then return false,"Character died" end
+        local diff=dest.Position-rr.Position
+        local horiz=Vector3.new(diff.X,0,diff.Z).Magnitude
+        if horiz<=6 and math.abs(diff.Y)<=11 then
+            S.diagEvent("ROUTE_JUMP_ARC_OK",
+                string.format("%s %d->%d horizontal=%.1f",zone,first,last,horiz))
+            return true
+        end
+        if os.clock()-lastJump>.5 and
+            hum.FloorMaterial~=Enum.Material.Air and horiz>7 then
+            hum.Jump=true
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            lastJump=os.clock()
+        end
+        hum:MoveTo(dest.Position)
+        task.wait(.1)
+    end
+    return false,string.format("Jump arc %d->%d timed out",first,last)
+end
+local function replayDrop(cf,id,index,zone)
+    local rr=root()
+    if not rr then return false,"Character missing" end
+    local pos=cf.Position
+    if rr.Position.Y<=pos.Y+6 then return true end
+    local started=os.clock()
+    local firstY=rr.Position.Y
+    local lowest=firstY
+    local lastMove=0
+    while valid(id) and os.clock()-started<12 do
+        rr=root()
+        local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+        if not rr or not hum or hum.Health<=0 then return false,"Died during descent" end
+        local horiz=Vector3.new(pos.X-rr.Position.X,0,pos.Z-rr.Position.Z).Magnitude
+        if (rr.Position.Y<=pos.Y+6 and horiz<=8) or
+            rr.Position.Y<pos.Y-15 then return true end
+        if horiz>65 then return false,"Drifted away from drop" end
+        if horiz>2 and os.clock()-lastMove>.45 then
+            hum:MoveTo(pos)
+            lastMove=os.clock()
+        end
+        lowest=math.min(lowest,rr.Position.Y)
+        if os.clock()-started>5 and lowest>firstY-2 then
+            return false,"Not descending at checkpoint "..index
+        end
+        task.wait(.08)
+    end
+    return false,"Drop timed out at "..tostring(zone).." checkpoint "..index
+end
+-- Traverse separately recorded stone->deposit and deposit->stone paths.
+-- Existing coarse presets still work through pathfinding fallback.
 local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local p=S.presets[zoneName]
     local recordedOutbound=reverse and p and p.routeOut and #p.routeOut>=2
@@ -1566,13 +1662,12 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local jumpIndices=recordedOutbound and p.routeOutJumps
         or (p and p.routeJumps)
     local jumps={}
-    for _,i in ipairs(jumpIndices or {}) do jumps[i]=true end
-    local startIndex=isReverse and math.clamp(reverseStartIndex or #nodes,1,math.max(1,#nodes)) or 1
-    if recordedOutbound then
+    for _,j in ipairs(jumpIndices or {}) do jumps[j]=true end
+    local startIndex=isReverse and math.clamp(reverseStartIndex or #nodes,1,
+        math.max(1,#nodes)) or 1
+    if recordedOutbound and zoneName=="Abyssal Depth" then
         local rr=root()
-        -- If an Abyss rope took us to the upper ledge, skip the recorded
-        -- underground outbound section and start at the nearest upper node.
-        if rr and zoneName=="Abyssal Depth" then
+        if rr then
             local nearest,dist=nil,math.huge
             for i,node in ipairs(nodes) do
                 local cf=S.unpackCF(node)
@@ -1584,45 +1679,105 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
             if nearest then startIndex=nearest end
         end
     end
-    S.diagEvent("WALK_ROUTE_START",string.format(
-        "zone=%s direction=%s checkpoints=%d start=%d",
-        tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
-    local nSteps=isReverse and startIndex or
-        (recordedOutbound and (#nodes-startIndex+1) or #nodes)
-    for i=1,nSteps do
-        local index=isReverse and (startIndex-i+1) or
-            (recordedOutbound and (startIndex+i-1) or i)
-        local cf=S.unpackCF(nodes[index])
-        if cf then
-            local r=root()
-            if not r then return false,"Character missing" end
-            if jumps[index] then
-                local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
-                if hum and hum.Health>0 then
-                    hum.Jump=true
-                    S.diagEvent("WALK_RECORDED_JUMP",tostring(zoneName).." point "..index)
+    -- Identify Abyss's complete falling shaft. Individual recorded
+    -- positions can be midair, including near-horizontal frames.
+    local dropStart,dropEnd
+    if zoneName=="Abyssal Depth" and not reverse then
+        local minY,minIndex=math.huge,nil
+        for i,node in ipairs(nodes) do
+            local cf=S.unpackCF(node)
+            if cf and cf.Position.Y<minY then
+                minY,minIndex=cf.Position.Y,i
+            end
+        end
+        if minIndex and minY<-220 then
+            for i=2,minIndex do
+                local a,b=S.unpackCF(nodes[i-1]),S.unpackCF(nodes[i])
+                if a and b and a.Position.Y-b.Position.Y>4 and
+                    a.Position.Y>minY+45 then
+                    dropStart=i
+                    break
                 end
             end
-            if (r.Position-cf.Position).Magnitude>14 then
-                S.diagEvent("WALK_CHECKPOINT_START",string.format(
-                    "zone=%s point=%d/%d dist=%.1f",
-                    tostring(zoneName),index,#nodes,(r.Position-cf.Position).Magnitude))
-                local ok,err=walkRoute(cf,id,1800,true)
-                if not ok then
-                    local bridged,bridgeErr=walkGroundBridge(cf,id)
-                    if not bridged then
-                        S.diagEvent("WALK_CHECKPOINT_ERROR",tostring(err)..
-                            " / "..tostring(bridgeErr))
-                        return false,"Route checkpoint "..index.."/"..#nodes..": "..
-                            tostring(err).." / "..tostring(bridgeErr)
+            if dropStart then
+                for i=dropStart,#nodes do
+                    local cf=S.unpackCF(nodes[i])
+                    local nextCF=i<#nodes and S.unpackCF(nodes[i+1]) or nil
+                    if cf and cf.Position.Y<=minY+4 and
+                        (not nextCF or math.abs(nextCF.Position.Y-cf.Position.Y)<4) then
+                        dropEnd=i
+                        break
                     end
                 end
-                S.diagEvent("WALK_CHECKPOINT_END",string.format(
-                    "zone=%s checkpoint=%d/%d",tostring(zoneName),index,#nodes))
+                dropEnd=dropEnd or minIndex
+                S.diagEvent("ABYSS_DESCENT_SEGMENT",
+                    string.format("%d-%d bottom=%.1f",dropStart,dropEnd,minY))
             end
         end
     end
-    S.diagEvent("WALK_ROUTE_END",tostring(zoneName)..
+    S.diagEvent("WALK_ROUTE_START",string.format(
+        "zone=%s direction=%s checkpoints=%d start=%d",
+        tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
+    local steps=isReverse and startIndex or
+        (recordedOutbound and (#nodes-startIndex+1) or #nodes)
+    local skipUntil=0
+    for step=1,steps do
+        local index=isReverse and (startIndex-step+1) or
+            (recordedOutbound and (startIndex+step-1) or step)
+        if index<=skipUntil then continue end
+        if not valid(id) then return false,"Stopped" end
+        local cf=S.unpackCF(nodes[index])
+        if cf then
+            local rr=root()
+            if not rr then return false,"Character missing" end
+            -- Azuralite's five outbound jump arcs must be traveled
+            -- continuously; stopping at airborne frames causes backtracking.
+            if recordedOutbound and zoneName=="Azuralite Oasis" and jumps[index] then
+                local landing=math.min(#nodes,index+6)
+                for j=index+1,#nodes do
+                    if jumps[j] then landing=j;break end
+                end
+                local ok,err=replayJumpArc(nodes,index,landing,id,zoneName)
+                if not ok then return false,
+                    "Route jump "..index.."->"..landing..": "..tostring(err) end
+                skipUntil=landing-1
+                continue
+            end
+            local prev=index>1 and S.unpackCF(nodes[index-1]) or nil
+            local fallFrame=not reverse and prev and
+                prev.Position.Y-cf.Position.Y>5 and
+                (Vector3.new(prev.Position.X-cf.Position.X,0,
+                    prev.Position.Z-cf.Position.Z)).Magnitude<9
+            local drop=not reverse and
+                ((dropStart and index>=dropStart and index<=dropEnd) or
+                (not dropStart and fallFrame))
+            local ok,err
+            if drop then
+                ok,err=replayDrop(cf,id,index,zoneName)
+            else
+                if jumps[index] then
+                    local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+                    local ahead=S.unpackCF(nodes[math.min(index+2,#nodes)])
+                    if hum and ahead then
+                        hum:MoveTo(ahead.Position)
+                        hum.Jump=true
+                        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+                        S.diagEvent("WALK_RECORDED_JUMP",
+                            zoneName.." point "..index)
+                        task.wait(.12)
+                    end
+                end
+                ok,err=replayPoint(cf,id,jumps[index])
+            end
+            if not ok then
+                S.diagEvent("WALK_CHECKPOINT_ERROR",
+                    zoneName.." point "..index..": "..tostring(err))
+                return false,"Route checkpoint "..index.."/"..#nodes..
+                    ": "..tostring(err)
+            end
+        end
+    end
+    S.diagEvent("WALK_ROUTE_END",zoneName..
         (reverse and " -> warp" or " -> dig")..
         (recordedOutbound and " (recorded outbound)" or ""))
     return valid(id)
@@ -1742,7 +1897,7 @@ local function returnToMappedStone(id)
         -- Never retrace the two underground points after climbing, and
         -- do not force a climb back to checkpoint 5 after arriving closer
         -- to an earlier upper checkpoint.
-        local nodes=p.route or {}
+        local nodes=(p.routeOut and #p.routeOut>=2) and p.routeOut or (p.route or {})
         local rr=root()
         if not rr then return false,"Character missing after Abyss rope" end
         local nearestIndex,nearestDist=nil,math.huge
@@ -1773,8 +1928,8 @@ local function returnToMappedStone(id)
         end
     end
     local ok,err
-    if oldZone=="Enchanted Ruins" and S.enchantedInboundRoute
-        and #S.enchantedInboundRoute>=3 then
+    if oldZone=="Enchanted Ruins" and not (p.routeOut and #p.routeOut>=2)
+        and S.enchantedInboundRoute and #S.enchantedInboundRoute>=3 then
         ok,err=S.returnViaEnchantedPath(id)
     else
         -- If script was started inside the Ruins or the prior route was
