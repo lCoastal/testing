@@ -239,16 +239,35 @@ function S.validPreset(p)
     local waypoint=type(p.waypoint)=="string" and waypointIndex[p.waypoint] and p.waypoint or nil
     -- Optional sparse points, ordered from the mapped stone to the dig
     -- location. The same points are used backward when returning.
-    local route=nil
-    if type(p.route)=="table" then
-        route={}
-        for _,node in ipairs(p.route) do
+    local function parseNodes(value)
+        if type(value)~="table" then return nil end
+        local nodes={}
+        for _,node in ipairs(value) do
             local cf=S.unpackCF(node)
-            if cf and #route<12 then route[#route+1]=S.packCF(cf) end
+            if cf and #nodes<500 then nodes[#nodes+1]=S.packCF(cf) end
         end
+        return nodes
     end
-    if dig or water or waypoint or route then
-        return {dig=S.packCF(dig),water=S.packCF(water),waypoint=waypoint,route=route}
+    local route=parseNodes(p.route)
+    local routeOut=parseNodes(p.routeOut)
+    local function parseJumps(value,count)
+        local jumps={}
+        if type(value)=="table" then
+            for _,index in ipairs(value) do
+                if type(index)=="number" and index>=1 and index<=count
+                    and index%1==0 then
+                    jumps[#jumps+1]=index
+                end
+            end
+        end
+        return jumps
+    end
+    local routeJumps=parseJumps(p.routeJumps,route and #route or 0)
+    local routeOutJumps=parseJumps(p.routeOutJumps,routeOut and #routeOut or 0)
+    if dig or water or waypoint or route or routeOut then
+        return {dig=S.packCF(dig),water=S.packCF(water),
+            waypoint=waypoint,route=route,routeOut=routeOut,
+            routeJumps=routeJumps,routeOutJumps=routeOutJumps}
     end
     return nil
 end
@@ -263,6 +282,9 @@ local function mergePreset(base,extra)
     if extra.water~=nil then base.water=extra.water end
     if extra.waypoint~=nil then base.waypoint=extra.waypoint end
     if extra.route~=nil then base.route=extra.route end
+    if extra.routeOut~=nil then base.routeOut=extra.routeOut end
+    if extra.routeJumps~=nil then base.routeJumps=extra.routeJumps end
+    if extra.routeOutJumps~=nil then base.routeOutJumps=extra.routeOutJumps end
     return base
 end
 -- Upgrade only the outdated Frostbite River built-in.
@@ -1538,17 +1560,49 @@ end
 -- Reversing the same list returns the avatar to the fast-travel stone.
 local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
     local p=S.presets[zoneName]
-    local nodes=p and p.route or {}
-    local startIndex=reverse and math.clamp(reverseStartIndex or #nodes,1,math.max(1,#nodes)) or 1
+    local recordedOutbound=reverse and p and p.routeOut and #p.routeOut>=2
+    local nodes=recordedOutbound and p.routeOut or (p and p.route or {})
+    local isReverse=reverse and not recordedOutbound
+    local jumpIndices=recordedOutbound and p.routeOutJumps
+        or (p and p.routeJumps)
+    local jumps={}
+    for _,i in ipairs(jumpIndices or {}) do jumps[i]=true end
+    local startIndex=isReverse and math.clamp(reverseStartIndex or #nodes,1,math.max(1,#nodes)) or 1
+    if recordedOutbound then
+        local rr=root()
+        -- If an Abyss rope took us to the upper ledge, skip the recorded
+        -- underground outbound section and start at the nearest upper node.
+        if rr and zoneName=="Abyssal Depth" then
+            local nearest,dist=nil,math.huge
+            for i,node in ipairs(nodes) do
+                local cf=S.unpackCF(node)
+                if cf and cf.Position.Y>-160 then
+                    local d=(rr.Position-cf.Position).Magnitude
+                    if d<dist then nearest,dist=i,d end
+                end
+            end
+            if nearest then startIndex=nearest end
+        end
+    end
     S.diagEvent("WALK_ROUTE_START",string.format(
         "zone=%s direction=%s checkpoints=%d start=%d",
         tostring(zoneName),reverse and "to warp" or "to sand",#nodes,startIndex))
-    for i=1,(reverse and startIndex or #nodes) do
-        local index=reverse and (startIndex-i+1) or i
+    local nSteps=isReverse and startIndex or
+        (recordedOutbound and (#nodes-startIndex+1) or #nodes)
+    for i=1,nSteps do
+        local index=isReverse and (startIndex-i+1) or
+            (recordedOutbound and (startIndex+i-1) or i)
         local cf=S.unpackCF(nodes[index])
         if cf then
             local r=root()
             if not r then return false,"Character missing" end
+            if jumps[index] then
+                local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+                if hum and hum.Health>0 then
+                    hum.Jump=true
+                    S.diagEvent("WALK_RECORDED_JUMP",tostring(zoneName).." point "..index)
+                end
+            end
             if (r.Position-cf.Position).Magnitude>14 then
                 S.diagEvent("WALK_CHECKPOINT_START",string.format(
                     "zone=%s point=%d/%d dist=%.1f",
@@ -1569,7 +1623,8 @@ local function followRoutePoints(zoneName,id,reverse,reverseStartIndex)
         end
     end
     S.diagEvent("WALK_ROUTE_END",tostring(zoneName)..
-        (reverse and " -> warp" or " -> dig"))
+        (reverse and " -> warp" or " -> dig")..
+        (recordedOutbound and " (recorded outbound)" or ""))
     return valid(id)
 end
 -- Abyssal Depth exit requires a real rope ProximityPrompt; ordinary
@@ -2925,8 +2980,9 @@ function S.refreshPreset()
         " | "..((p and S.unpackCF(p.water)) and "Water saved" or "Water missing")..
         (mapping and (" | WP: "..mapping) or " | WP: NOT MAPPED")
     if routeCountLabel then
-        routeCountLabel.Text="Route: "..tostring(p and p.route and #p.route or 0)..
-            " points (stone -> dig; reverse to return)"
+        routeCountLabel.Text="Inbound "..tostring(p and p.route and #p.route or 0)..
+            " | Outbound "..tostring(p and p.routeOut and #p.routeOut or 0)..
+            " pts | "..tostring(S.routeRecording and "RECORDING" or "idle")
     end
     if diagZoneName then diagZoneName.Text=name end
     if diagSavedStatus then
@@ -3061,7 +3117,7 @@ S.presetEditor=make("ScrollingFrame",{
     Size=UDim2.new(1,-20,1,-181),
     BackgroundTransparency=1,
     BorderSizePixel=0,
-    CanvasSize=UDim2.fromOffset(0,520),
+    CanvasSize=UDim2.fromOffset(0,680),
     ScrollBarThickness=5,
     ScrollingDirection=Enum.ScrollingDirection.Y,
     Visible=false
@@ -3093,10 +3149,17 @@ S.morePresetHelp=label(
 S.morePresetHelp.TextWrapped=true
 relocate(S.morePresetHelp,S.presetEditor,4,334)
 S.addWalkPoint=button("ADD WALK POINT",4,382,149,34,S.presetEditor)
-S.clearWalkRoute=button("CLEAR WALK ROUTE",167,382,149,34,S.presetEditor)
-routeCountLabel=label("Route: 0 points (stone -> dig)",4,425,306,40,10,MUTED)
+S.clearWalkRoute=button("CLEAR SELECTED ROUTE",167,382,149,34,S.presetEditor)
+routeCountLabel=label("Inbound 0 | Outbound 0",4,425,306,38,10,MUTED)
 routeCountLabel.TextWrapped=true
 relocate(routeCountLabel,S.presetEditor,4,425)
+S.routeMode="INBOUND"
+S.routeModeButton=button("DIRECTION: TO DEPOSIT",4,465,312,34,S.presetEditor)
+S.routeRecordButton=button("START WALK RECORDING",4,507,312,36,S.presetEditor)
+S.routeRecordHint=label(
+    "Walk naturally. Records every 4 studs, jumps and turns. Stop to save.",
+    4,552,306,56,10,MUTED)
+S.routeRecordHint.TextWrapped=true
 S.refreshPreset()
 S.editPresets.MouseButton1Click:Connect(function()
     S.presetEditor.Visible=not S.presetEditor.Visible
@@ -3742,6 +3805,102 @@ bind(nextWaypoint.MouseButton1Click,function()
     S.refreshPreset()
     S.savePresets()
 end)
+-- Automatic route recorder: separate stone->deposit and deposit->stone
+-- traces, sampled while the player walks. Never overwrites a preset until
+-- STOP & SAVE is pressed. The user's saved JSON remains v2-compatible.
+local function captureRoutePoint(rec,forceJump)
+    if not rec or S.routeRecording~=rec then return end
+    local rr=root()
+    if not rr then return end
+    local nodes=rec.nodes
+    local last=nodes[#nodes] and S.unpackCF(nodes[#nodes])
+    local moved=last and (rr.Position-last.Position).Magnitude or math.huge
+    local turn=false
+    if #nodes>=2 then
+        local prev=S.unpackCF(nodes[#nodes-1])
+        if prev and last and moved>=2 then
+            local a=last.Position-prev.Position
+            local b=rr.Position-last.Position
+            if a.Magnitude>1 and b.Magnitude>1 then
+                turn=a.Unit:Dot(b.Unit)<.8
+            end
+        end
+    end
+    if moved<4 and not forceJump and not turn then return end
+    if #nodes>=500 then
+        S.diagEvent("ROUTE_RECORD_LIMIT",rec.zone.." reached 500 points")
+        return
+    end
+    nodes[#nodes+1]=S.packCF(rr.CFrame)
+    if forceJump then
+        rec.jumps[#rec.jumps+1]=#nodes
+    end
+end
+local function stopRouteRecording(save)
+    local rec=S.routeRecording
+    if not rec then return end
+    if rec.jumpConnection then rec.jumpConnection:Disconnect() end
+    if save then captureRoutePoint(rec,false) end
+    S.routeRecording=nil
+    S.routeRecordButton.Text="START WALK RECORDING"
+    if not save or #rec.nodes<2 then
+        show("Recording discarded (need at least 2 positions)")
+        S.refreshPreset()
+        return
+    end
+    local key=rec.mode=="INBOUND" and "route" or "routeOut"
+    local jumpKey=rec.mode=="INBOUND" and "routeJumps" or "routeOutJumps"
+    S.presets[rec.zone]=S.presets[rec.zone] or {}
+    S.overrides[rec.zone]=S.overrides[rec.zone] or {}
+    S.presets[rec.zone][key]=rec.nodes
+    S.overrides[rec.zone][key]=rec.nodes
+    S.presets[rec.zone][jumpKey]=rec.jumps
+    S.overrides[rec.zone][jumpKey]=rec.jumps
+    local ok,err=S.savePresets()
+    S.diagEvent("ROUTE_RECORDED",string.format(
+        "%s %s points=%d jumps=%d saved=%s",
+        rec.zone,rec.mode,#rec.nodes,#rec.jumps,tostring(ok)))
+    S.refreshPreset()
+    show(ok and string.format("Saved %s %s: %d points, %d jumps",
+        rec.zone,rec.mode,#rec.nodes,#rec.jumps) or
+        "Recorded in session only: "..tostring(err))
+end
+bind(S.routeModeButton.MouseButton1Click,function()
+    if S.routeRecording then show("Stop recording before changing direction");return end
+    S.routeMode=S.routeMode=="INBOUND" and "OUTBOUND" or "INBOUND"
+    S.routeModeButton.Text=S.routeMode=="INBOUND"
+        and "DIRECTION: TO DEPOSIT" or "DIRECTION: TO WAYPOINT"
+end)
+bind(S.routeRecordButton.MouseButton1Click,function()
+    if S.routeRecording then stopRouteRecording(true);return end
+    if S.running then show("Stop automation before recording");return end
+    local rr=root()
+    local name=S.getSelectedZone()
+    local preset=S.presets[name]
+    if not rr or not preset or not preset.waypoint then
+        show("Select a mapped zone and spawn character first");return
+    end
+    local rec={zone=name,mode=S.routeMode,nodes={},jumps={}}
+    S.routeRecording=rec
+    captureRoutePoint(rec,false)
+    local hum=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
+    if hum then
+        rec.jumpConnection=hum.StateChanged:Connect(function(_,state)
+            if state==Enum.HumanoidStateType.Jumping then
+                captureRoutePoint(rec,true)
+            end
+        end)
+    end
+    S.routeRecordButton.Text="STOP & SAVE RECORDING"
+    show("Recording "..name.." "..S.routeMode.."; walk normally")
+    S.diagEvent("ROUTE_RECORD_START",name.." "..S.routeMode)
+    task.spawn(function()
+        while S.alive and S.routeRecording==rec do
+            captureRoutePoint(rec,false)
+            task.wait(.12)
+        end
+    end)
+end)
 bind(S.addWalkPoint.MouseButton1Click,function()
     if S.running then show("Stop the farm before recording a route");return end
     local r=root()
@@ -3749,8 +3908,9 @@ bind(S.addWalkPoint.MouseButton1Click,function()
     local name=S.getSelectedZone()
     local p=S.presets[name] or {}
     if not p.waypoint then show("Map this zone to a waypoint first");return end
-    local nodes=p.route or {}
-    if #nodes>=12 then show("Maximum 12 route points");return end
+    local key=S.routeMode=="INBOUND" and "route" or "routeOut"
+    local nodes=p[key] or {}
+    if #nodes>=500 then show("Maximum 500 route points");return end
     local previous=nodes[#nodes]
     local cf=S.packCF(r.CFrame)
     if previous then
@@ -3763,10 +3923,10 @@ bind(S.addWalkPoint.MouseButton1Click,function()
     local newRoute={}
     for _,v in ipairs(nodes) do newRoute[#newRoute+1]=v end
     newRoute[#newRoute+1]=cf
-    p.route=newRoute
+    p[key]=newRoute
     S.presets[name]=p
     S.overrides[name]=S.overrides[name] or {}
-    S.overrides[name].route=newRoute
+    S.overrides[name][key]=newRoute
     local ok,err=S.savePresets()
     S.refreshPreset()
     show(ok and ("Saved walk point "..#newRoute.." for "..name) or
@@ -3776,9 +3936,13 @@ bind(S.clearWalkRoute.MouseButton1Click,function()
     if S.running then show("Stop the farm before changing routes");return end
     local name=S.getSelectedZone()
     S.presets[name]=S.presets[name] or {}
-    S.presets[name].route={}
+    local key=S.routeMode=="INBOUND" and "route" or "routeOut"
+    local jumpKey=S.routeMode=="INBOUND" and "routeJumps" or "routeOutJumps"
+    S.presets[name][key]={}
+    S.presets[name][jumpKey]={}
     S.overrides[name]=S.overrides[name] or {}
-    S.overrides[name].route={}
+    S.overrides[name][key]={}
+    S.overrides[name][jumpKey]={}
     local ok,err=S.savePresets()
     S.refreshPreset()
     show(ok and ("Cleared walk route for "..name) or
