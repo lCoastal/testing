@@ -273,6 +273,22 @@ local function closestWaypoint(maxDist)
  if d>maxDist then return nil,string.format("nearest waypoint %.1f studs away",d) end
  return nearest,d
 end
+local function recoverAtRubbleCreek()
+ if not waitAlive(45) then return false,"character did not respawn" end
+ local rubble=stone("Rubble Creek")
+ local pos=pivot(rubble)
+ local r=root()
+ if not pos or not r then return false,"Rubble Creek waypoint unavailable" end
+ local dist=(r.Position-pos).Magnitude
+ log(string.format("RESPAWN RECOVERY: spawn-to-Rubble Creek waypoint %.1f studs",dist))
+ if dist>550 then return false,"respawn >550 studs from Rubble Creek stone" end
+ if dist<=55 then return true end
+ local ok,err=visit(pos)
+ if not ok then return false,"cannot walk from respawn to stone: "..tostring(err) end
+ if not waitNear(pos,60,3) then return false,"did not reach Rubble Creek waypoint range" end
+ log("RESPAWN RECOVERY: reached Rubble Creek waypoint")
+ return true
+end
 local function runRoute(nodes,jumps,zone,direction)
  local marked={}
  for _,i in ipairs(jumps or {}) do marked[i]=true end
@@ -304,6 +320,10 @@ local function timedAllowed(zone)
  return true
 end
 local function run()
+ local beta=E.CoastalSafeFarm
+ if beta and beta.alive and beta.running then
+  error("Turn Auto Dredge / Auto Farm OFF before starting the route tester")
+ end
  if type(readfile)~="function" then error("readfile is required to read your recorded routes") end
  local ok,raw=pcall(readfile,"GalaxisHub_ZonePresets.json")
  if not ok then error("Local GalaxisHub_ZonePresets.json not found. Load your uploaded preset into the executor's filesystem first.") end
@@ -348,11 +368,17 @@ local function run()
   if not waitAlive(45) then log("STOP: character did not respawn");break end
   local from,dist=closestWaypoint(80)
   if not from then
-   local msg="not near any fast travel stone (likely death/spawn route needed)"
-   failed+=1
-   results[#results+1]=zone.." | FAIL | "..msg
-   log("FAIL "..zone.." | "..msg)
-   break
+   -- A fresh character starts in Rubble Creek, possibly farther than
+   -- FastTravel range from its stone.
+   local recovered,why=recoverAtRubbleCreek()
+   if recovered then from,dist=closestWaypoint(80) end
+   if not from then
+    local msg="no departure stone: "..tostring(why)
+    failed+=1
+    results[#results+1]=zone.." | FAIL | "..msg
+    log("FAIL "..zone.." | "..msg)
+    break
+   end
   end
   local warp,warpErr=fastestWaypoint(from,targetStone)
   if not warp then
@@ -394,13 +420,13 @@ local function run()
    -- to Rubble Creek if death reset the character, otherwise stop.
    if not healthy() then
     log("DEATH: waiting for Rubble Creek respawn")
-    if waitAlive(45) then
-     local spawnStone,spawnDist=closestWaypoint(95)
-     if spawnStone then
-      log(string.format("RESPAWN: nearest waypoint=%s dist=%.1f; next zone resumes from spawn",
-       spawnStone.Name,spawnDist))
-     else log("RESPAWN: not near waypoint; stopping safely");break end
-    else break end
+    local recovered,why=recoverAtRubbleCreek()
+    if recovered then
+     log("RESPAWN: safely at Rubble Creek waypoint; proceeding to next zone")
+    else
+     log("RESPAWN: recovery failed: "..tostring(why))
+     break
+    end
    else
     log("STOP: cannot verify return to waypoint; do not chain unsafe travel")
     break
