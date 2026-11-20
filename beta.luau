@@ -2013,12 +2013,61 @@ local function walkFromStoneToZone(zoneName,id)
         S.enchantedRecording=nil
         return false,err
     end
-    local reached,why=walkRoute(target,id,1150)
-    if not reached then
+    -- The saved route is the important part of the journey. Its final
+    -- checkpoint should already be close to the deposit, so do not let a
+    -- second full pathfinding pass stall or time out on the tiny last gap.
+    -- Use the normal verified position move when close; only walk the final
+    -- leg when the recording ends genuinely far away.
+    local rr=root()
+    if not rr then
         S.enchantedRecording=nil
-        return false,why
+        return false,"Character missing after saved route"
     end
-    local settled=stableAt(target,id,12,1.0,3.1)
+    local finalGap=(rr.Position-target.Position).Magnitude
+    S.diagEvent("DREDGE_FINAL_DEPOSIT_LEG",string.format(
+        "zone=%s gap=%.1f",zoneName,finalGap))
+    local reached=false
+    local why=nil
+    if finalGap<=220 then
+        reached=move(target,id)
+        if not reached then
+            rr=root()
+            finalGap=rr and (rr.Position-target.Position).Magnitude or math.huge
+            if finalGap<=260 then
+                S.diagEvent("DREDGE_FINAL_DEPOSIT_RETRY",
+                    string.format("verified move retry gap=%.1f",finalGap))
+                reached=move(target,id)
+            end
+        end
+        if not reached then
+            rr=root()
+            finalGap=rr and (rr.Position-target.Position).Magnitude or math.huge
+            if finalGap<=220 then
+                reached,why=walkRoute(target,id,300)
+            else
+                why="Final deposit gap too large after route: "..math.floor(finalGap)
+            end
+        end
+    else
+        reached,why=walkRoute(target,id,1150)
+        if not reached then
+            rr=root()
+            finalGap=rr and (rr.Position-target.Position).Magnitude or math.huge
+            if finalGap<=220 then
+                S.diagEvent("DREDGE_FINAL_DEPOSIT_TELEPORT",
+                    string.format("walk fallback gap=%.1f",finalGap))
+                reached=move(target,id)
+            end
+        end
+    end
+    rr=root()
+    local finalDistance=rr and (rr.Position-target.Position).Magnitude or math.huge
+    if not reached or finalDistance>14 then
+        S.enchantedRecording=nil
+        return false,why or string.format(
+            "Final deposit position not reached (%.1f studs)",finalDistance)
+    end
+    local settled=stableAt(target,id,14,.45,1.5)
     if recording then
         S.recordEnchantedStep()
         local steps=S.enchantedRecording
