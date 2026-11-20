@@ -289,6 +289,33 @@ local function recoverAtRubbleCreek()
  log("RESPAWN RECOVERY: reached Rubble Creek waypoint")
  return true
 end
+-- Samples taken while falling are not pathfinding destinations.
+-- Recognize near-vertical descending runs, let gravity complete the fall,
+-- and verify that the character reaches the recorded landing level.
+local function descendTo(pos,pointNo)
+ local r=root()
+ if not r then return false,"character missing" end
+ local horizontal=Vector3.new(pos.X-r.Position.X,0,pos.Z-r.Position.Z).Magnitude
+ if horizontal>10 then return false,"too far horizontally from drop: "..math.floor(horizontal) end
+ if r.Position.Y<=pos.Y+6 then return true end
+ local started=os.clock()
+ local startY=r.Position.Y
+ local lowest=startY
+ while live() and os.clock()-started<12 do
+  r=root()
+  if not healthy() or not r then return false,"died during drop" end
+  if r.Position.Y<=pos.Y+6 then
+   log(string.format("DROP point %d reached Y %.1f (target %.1f)",pointNo,r.Position.Y,pos.Y))
+   return true
+  end
+  lowest=math.min(lowest,r.Position.Y)
+  if os.clock()-started>4 and lowest>startY-2 then
+   return false,"not falling at vertical checkpoint (still at Y "..math.floor(r.Position.Y)..")"
+  end
+  task.wait(.08)
+ end
+ return false,"drop timeout at point "..pointNo
+end
 local function runRoute(nodes,jumps,zone,direction)
  local marked={}
  for _,i in ipairs(jumps or {}) do marked[i]=true end
@@ -304,10 +331,21 @@ local function runRoute(nodes,jumps,zone,direction)
    local ok,err=climbRope()
    if not ok then return false,"rope: "..tostring(err) end
   end
-  -- Recorded outbound routes often start within a few studs of deposit.
-  local ok,err=visit(pos,marked[i])
-  if not ok then return false,
-    string.format("%s point %d/%d: %s",direction,i,#nodes,tostring(err))
+  local prev=i>1 and position(nodes[i-1]) or nil
+  local vertical=prev and prev.Y-pos.Y>5 and
+    (Vector3.new(prev.X-pos.X,0,prev.Z-pos.Z)).Magnitude<9
+  local ok,err
+  if direction=="IN" and vertical and pos.Y<prev.Y then
+   -- If already below this in-air point, don't try to walk back upward.
+   ok,err=descendTo(pos,i)
+   if not ok then
+    return false,string.format("DROP point %d/%d: %s",i,#nodes,tostring(err))
+   end
+  else
+   ok,err=visit(pos,marked[i])
+   if not ok then return false,
+     string.format("%s point %d/%d: %s",direction,i,#nodes,tostring(err))
+   end
   end
   if i%20==0 then log(zone.." "..direction.." "..i.."/"..#nodes) end
  end
