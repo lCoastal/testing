@@ -2361,6 +2361,11 @@ local function maintainAbyssFlare(id)
         S.abyssFlareLastSeen=now
         return
     end
+    -- Never burn more consumables because placed-flare detection failed.
+    -- One successful activation per Abyss visit, plus a 10-minute cooldown
+    -- across visits/restarts within the same running UI.
+    if S.abyssFlareThrownThisVisit then return end
+    if now<(S.abyssFlareLastThrowAt or -math.huge)+600 then return end
     if now<(S.abyssFlareNextAttempt or 0) then return end
     local c=P.Character
     local b2=P:FindFirstChild("BackpackTwo")
@@ -2453,13 +2458,20 @@ local function maintainAbyssFlare(id)
             local sent,why=pcall(function() held:Activate() end)
             S.diagEvent(sent and "ABYSS_FLARE_ACTIVATE_SENT"
                 or "ABYSS_FLARE_ACTIVATE_ERROR",sent and "Tool:Activate" or tostring(why))
+            if sent then
+                S.abyssFlareThrownThisVisit=true
+                S.abyssFlareLastThrowAt=os.clock()
+                S.abyssFlareNextAttempt=os.clock()+600
+                S.diagEvent("ABYSS_FLARE_LIMIT",
+                    "One activation this visit; 600s minimum between throws")
+            end
             task.wait(.35)
             if S.nearbyFireflyFlare() then
                 S.diagEvent("ABYSS_FLARE_CONFIRMED","Lit flare detected")
-                S.abyssFlareNextAttempt=os.clock()+90
+                S.abyssFlareNextAttempt=os.clock()+600
             else
                 S.diagEvent("ABYSS_FLARE_UNCONFIRMED","No placed flare detected")
-                S.abyssFlareNextAttempt=os.clock()+20
+                S.abyssFlareNextAttempt=os.clock()+600
             end
         else
             S.diagEvent("ABYSS_FLARE_NOT_HELD","EquipRemote sent; Tool not held")
@@ -2782,6 +2794,9 @@ local function dredgeCycle(id)
         -- separate FUTURE visit, not repeatedly during this visit.
         S.dredgeWarped[targetZone]=nil
         S.dredgeTravelFailed[targetZone]=nil
+        if targetZone=="Abyssal Depth" then
+            S.abyssFlareThrownThisVisit=false
+        end
         S.dredgeAt=targetZone
         S.dredgeZoneSince=os.clock()
         S.dredgeZoneCycle=S.cycles
