@@ -1432,7 +1432,28 @@ end
 -- water positions AFTER each phase completes. This is intentionally fast.
 -- Zone and waypoint travel below still uses real Humanoid walking.
 local function farmMove(cf,id)
-    return move(cf,id)
+    -- DIG and WATER can be 4-6 studs apart. move()'s ordinary
+    -- 7-stud arrival tolerance is suitable for travel but silently
+    -- skipped these essential phase transitions.
+    if typeof(cf)~="CFrame" then return false end
+    for attempt=1,3 do
+        if not valid(id) then return false end
+        local avatar=root()
+        if not avatar then return false end
+        local before=(avatar.Position-cf.Position).Magnitude
+        if before<=1.5 then return true end
+        local ok=pcall(function() avatar.CFrame=cf end)
+        if not ok or not pause(S.timing("teleport"),id) then return false end
+        avatar=root()
+        local after=avatar and (avatar.Position-cf.Position).Magnitude or math.huge
+        if after<=2.5 then return true end
+        if attempt==3 then
+            S.diagEvent("FARM_PHASE_POSITION_FAILED",string.format(
+                "before=%.1f after=%.1f zone=%s",
+                before,after,tostring(S.dredgeAt or S.activeZone)))
+        end
+    end
+    return false
 end
 -- Normal farm movement is instantaneous. On the next remote call, however,
 -- the server may have snapped the character back to the previous location.
@@ -3946,6 +3967,14 @@ local function farming(id,r,target)
         moved=farmMove(S.water,id)
         S.traceEnd("MOVE_TO_WATER","success="..tostring(moved))
         if not moved then return "Water teleport failed" end
+        if S.dredge and S.water then
+            local avatar=root()
+            local remaining=avatar and
+                (avatar.Position-S.water.Position).Magnitude or math.huge
+            S.diagEvent("PAN_WATER_POSITION",string.format(
+                "zone=%s distance=%.2f",
+                tostring(S.dredgeAt),remaining))
+        end
         -- Dredge changes zones and Luck Cap, so a one-time settle check
         -- after new-zone arrival avoids racing a server position update.
         -- Ordinary Auto Farm gets no extra wait.
@@ -3973,8 +4002,8 @@ local function farming(id,r,target)
             if S.dredge then
                 local avatar=root()
                 local drift=avatar and S.water and
-                    (avatar.Position-S.water.Position).Magnitude or 0
-                if drift>7 then
+                    (avatar.Position-S.water.Position).Magnitude or math.huge
+                if drift>2.5 then
                     S.diagEvent("PAN_REJECT_DRIFT",string.format(
                         "attempt=%d distWater=%.1f",panAttempts,drift))
                     if not farmMove(S.water,id) then return "Water recovery failed" end
