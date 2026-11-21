@@ -77,14 +77,22 @@ local function tSort(list,origin)
     end
     return ordered
 end
+local function tWalkToWaypoint(wp,id)
+    local folder=S.waypointFolder()
+    local obj=folder and folder:FindFirstChild(wp or "")
+    local target=obj and S.getWaypointCF(obj)
+    if not target then return false,"Waypoint missing: "..tostring(wp) end
+    -- Treasure travel is WALK ONLY. Do not invoke goWaypoint/FastTravel.
+    return walkRoute(target,id,10000)
+end
 local function tRegion(region,id)
     local p=S.presets and S.presets[region]
     if not p then return false,"No saved route for map region "..region end
     local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(region))
     if not wp then return false,"No mapped warp stone for "..region end
-    tStatus("Travelling to "..region.." via "..wp)
-    local ok,why=goWaypoint(wp,id)
-    if not ok then return false,why end
+    tStatus("Running to "..region.." via "..wp)
+    local ok,why=tWalkToWaypoint(wp,id)
+    if not ok then return false,"Could not run to "..wp..": "..tostring(why) end
     ok,why=walkFromStoneToZone(region,id)
     if not ok then return false,why end
     S.dredgeAt,S.activeZone=region,region
@@ -96,8 +104,8 @@ local function tRestore(cp,id,lastRegion)
         local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(cp.zone))
         if wp then
             if lastRegion then S.dredgeAt=lastRegion end
-            local ok,why=goWaypoint(wp,id)
-            if not ok then return false,"Return warp failed: "..tostring(why) end
+            local ok,why=tWalkToWaypoint(wp,id)
+            if not ok then return false,"Could not run back to "..wp..": "..tostring(why) end
             ok,why=walkFromStoneToZone(cp.zone,id)
             if not ok then return false,"Return route failed: "..tostring(why) end
         end
@@ -137,8 +145,10 @@ local function tRun(id)
         S.treasureAttempted[m.guid]=true
         tStatus(string.format("Map %d/%d | %s | travelling to target",i,#ordered,m.region))
         local target=CFrame.new(m.pos)
-        if not move(target,id) or not stableAt(target,id,10,.35,3) then
-            ok,err=false,"Could not settle at map destination";break
+        -- Map destinations are approached on foot as well; no CFrame move/teleport.
+        local walked,walkWhy=walkRoute(target,id,1800)
+        if not walked or not stableAt(target,id,12,.45,3) then
+            ok,err=false,"Could not run to map destination: "..tostring(walkWhy);break
         end
         local pan=panTool() or S.panInBackpack()
         if not pan or not requirePanEquipped(pan,id) then
