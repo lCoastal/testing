@@ -136,6 +136,12 @@ end
     local preset=S.presets[zone]
     if not preset then return nil end
     if waypointIndex[preset.waypoint or ""] then return preset.waypoint end
+    -- Verified by the 2026-11-20 route test: Windswept Beach
+    -- successfully travelled inbound and outbound from Volcanic Sands.
+    if zone=="Windswept Beach" and waypointIndex["Volcanic Sands"] then
+        preset.waypoint="Volcanic Sands"
+        return "Volcanic Sands"
+    end
     -- Several zones share an identically named in-game fast-travel stone.
     -- Prefer that exact, verified name before attempting route-coordinate inference.
     if waypointIndex[zone] then
