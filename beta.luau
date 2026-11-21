@@ -14,6 +14,7 @@ local MODULES = {
     {"09_farming.luau", "Selling and farming helpers"},
     {"10_routes_ui.luau", "Zone controls and route recording"},
     {"11_worker.luau", "Farm worker and input handlers"},
+    {"12_treasure.luau", "Treasure Map diagnostics"},
 }
 local parentEnv = getfenv()
 local sharedEnv = setmetatable({}, {__index = parentEnv})
