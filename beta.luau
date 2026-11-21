@@ -1,7 +1,7 @@
 -- GALAXIS HUB | MODULAR BETA LOADER
 -- Execute this file only. Feature code lives in /modules and shares one isolated environment.
 local BASE = "https://raw.githubusercontent.com/lCoastal/testing/main/modules/"
-local CACHE_BUSTER = "4b1413682f081542"
+local CACHE_BUSTER = "20261121-treasure-route-1"
 local MODULES = {
     {"01_core.luau", "Core and shared services"},
     {"02_dredge.luau", "Dredge routing and quest engine"},
@@ -14,7 +14,7 @@ local MODULES = {
     {"09_farming.luau", "Selling and farming helpers"},
     {"10_routes_ui.luau", "Zone controls and route recording"},
     {"11_worker.luau", "Farm worker and input handlers"},
-    {"12_treasure.luau", "Treasure Map diagnostics"},
+    {"12_treasure.luau", "Automatic Treasure Map routing"},
 }
 local parentEnv = getfenv()
 local sharedEnv = setmetatable({}, {__index = parentEnv})
