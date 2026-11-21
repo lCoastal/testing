@@ -34,84 +34,7 @@ bind(S.liveCopyButton.MouseButton1Click,function()
 end)
 
 -- Quest and live zone diagnostics refresh independently of farming.
-task.spawn(function()
-    while S.alive do
-        if livePage.Visible then
-            S.perfLabel.Text=string.format("FPS: %.1f | Frame: %.1f ms | Auto: %s",
-                S.perfFPS or 0,S.perfFrameMs or 0,S.running and "ON" or "OFF")
-            S.mineralFileLabel.Text="MINERAL LOG: "..FILE
-            local action=S.traceCurrentAction or "Idle / no active action"
-            local age=S.traceActionStartedAt and
-                string.format("%.1fs",os.clock()-S.traceActionStartedAt) or "N/A"
-            local pan=panTool()
-            local pos=root()
-            local hp=P.Character and P.Character:FindFirstChildOfClass("Humanoid")
-            local function d(cf)
-                return pos and cf and string.format("%.1f studs",
-                    (pos.Position-cf.Position).Magnitude) or "N/A"
-            end
-            local idleFor=os.clock()-(S.liveDebugLastChangeAt or os.clock())
-            S.liveStatus.Text=
-                "Running: "..tostring(S.running).." | Mode: "..(S.dredge and "DREDGE" or "FARM")..
-                "\nPhase: "..tostring(S.diagPhase or "Idle")..
-                "\nAction: "..action.." ("..age..")"..
-                "\nSelected: "..tostring(S.getSelectedZone())..
-                "\nLoaded: "..tostring(S.dredgeAt or S.activeZone or "none")..
-                "\nPan: "..tostring(pan and pan.tool.Name or "NOT EQUIPPED")..
-                "\nFill: "..tostring(pan and fill(pan) or "N/A")..
-                    " / "..tostring(S.capacity() or "N/A")..
-                "\nDistance: dig "..d(S.dig).." | water "..d(S.water)..
-                "\nHP: "..tostring(hp and math.floor(hp.Health) or "N/A")..
-                "\nLast Collect: "..tostring(S.diagLastCollectMs or "N/A").." ms"..
-                "\nLuck cap: "..tostring(S.dredgeAppliedCap or "N/A")..
-                "\nState unchanged: "..string.format("%.1fs",idleFor)..
-                "\nLast failure: "..tostring(S.diagLastFailure or "None"):sub(1,85)
-            S.liveInfo.Text=S.liveDebugError and
-                ("FILE ERROR: "..S.liveDebugError):sub(1,125) or
-                "Saving snapshots every 2s active / 8s idle"
-        end
-        if reforgePage.Visible then
-            local item=heldReforgeItem()
-            S.reforgeEquipped.Text="Held item: "..(item and item.Name or "none / not reforgeable")
-        end
-        if diagnosticPage.Visible then
-            local r=root()
-            local pos=r and r.Position
-            S.zoneLiveInfo.Text="Current deposit: "..tostring(zone())..
-                "\nCharacter: "..(pos and string.format("%.1f, %.1f, %.1f",pos.X,pos.Y,pos.Z) or "not spawned")..
-                "\nLoaded farm zone: "..tostring(S.activeZone or "none")
-        end
-        if dredgePage.Visible then
-            dredgeWorkLabel.Text="NOW: "..tostring(S.dredgeCurrentWork or "Idle")..
-                "\nNEXT: "..tostring(S.dredgeNextWork or "Awaiting plan")
-            local quest=getQuest()
-            if quest then
-                local progress={}
-                local data=quest.StepProgress
-                if type(data)=="table" then
-                    for _,v in pairs(data) do
-                        if type(v)=="table" then
-                            if v.Talk=="DredgeMaster" then
-                                progress[#progress+1]="Talk to Dredge Master (turn-in)"
-                            elseif type(v.Collect)=="string" then
-                                progress[#progress+1]=v.Collect..": "..
-                                    tostring(v.Progress or 0).."/"..tostring(v.Amount or "?")
-                            end
-                        end
-                    end
-                end
-                table.sort(progress)
-                dredgeObjectiveLabel.Text=#progress>0 and
-                    ("QUEST OBJECTIVES\n"..table.concat(progress,"\n"))
-                    or "Quest data found; objectives not available"
-            else
-                dredgeObjectiveLabel.Text="Quest data not yet available"
-            end
-        end
-        task.wait(1)
-    end
-end)
-
+-- Periodic diagnostic UI refresh removed.
 show=function(t)
     if S.alive then
         status.Text=t
@@ -142,7 +65,7 @@ end)
 bind(S.actionTraceButton.MouseButton1Click,function()
     if S.actionTraceEnabled then S.traceAction("TRACE_DISABLED","Disabled in GUI") end
     S.actionTraceEnabled=not S.actionTraceEnabled
-    S.actionTraceButton.Text="ACTION TRACE: "..(S.actionTraceEnabled and "ON" or "OFF")
+    S.actionTraceButton.Text="ACTION TRACE: OFF"
     if S.actionTraceEnabled then S.traceAction("TRACE_RESUMED","Enabled in GUI") end
 end)
 -- Idle signal only: no per-frame input, no extra farming calls.
@@ -173,24 +96,7 @@ bind(S.debugReportButton.MouseButton1Click,function()
     show("Debug "..(copied and "COPIED" or "not copied")..
         " | TXT "..(saved and "saved" or "unavailable"))
 end)
-      function xyz(cf)
-    local p=cf.Position
-    return string.format("%.1f, %.1f, %.1f",p.X,p.Y,p.Z)
-end
-task.spawn(function()
-    while S.alive do
-        local currentPan=S.cycles+(S.running and 1 or 0)
-        local collected=L.minerals+#L.pending
-        local avg=S.cycles>0 and string.format("%.2fs",S.totalCycleTime/S.cycles) or "--"
-        statsFooter.Text=string.format("Pan: %d  |  Minerals: %d  |  Avg: %s",currentPan,collected,avg)
-        if S.running and os.clock()-(S.diagSampleAt or 0)>=1 then
-            S.diagSampleAt=os.clock()
-            S.diagEvent("SAMPLE",S.diagSnapshot())
-        end
-        task.wait(.25)
-    end
-end)
-
+-- Periodic diagnostic sampling worker removed.
 stop=function()
     if not S.alive then return end
     S.diagEvent("STOP",S.diagSnapshot())
