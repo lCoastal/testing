@@ -5,6 +5,7 @@ for _,k in ipairs({"treasureTitle","treasureStatus","treasureToggle","treasureSc
 end
 S.treasureEnabled=S.treasureEnabled==true
 S.treasureBusy=false
+S.treasureRequested=false
 S.treasureCompleted=S.treasureCompleted or {}
 S.treasureAttempted=S.treasureAttempted or {}
 S.treasureLastError=nil
@@ -168,7 +169,7 @@ S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
     local n=#tMaps()
     if n<2 then
-        S.treasureRequested=true
+        S.treasureRequested=false
         tStatus("AUTO ON | Waiting for maps ("..n.."/2)")
         return
     end
