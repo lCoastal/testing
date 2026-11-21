@@ -127,8 +127,7 @@ dredgeStatus=label("Dredge idle",14,684,312,22,11,MUTED)
 dredgeStatus.TextTruncate=Enum.TextTruncate.AtEnd
 function S.getSelectedZone() return ZONE_NAMES[S.selectedZone] end
 function S.getSelectedWaypoint() return WAYPOINT_NAMES[S.selectedWaypoint] end
-      routeCountLabel
-      diagZoneName,diagSavedStatus
+routeCountLabel,diagZoneName,diagSavedStatus=nil,nil,nil
 function S.refreshPreset()
     local name=S.getSelectedZone()
     local p=S.presets[name]
