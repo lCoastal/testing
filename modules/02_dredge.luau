@@ -16,7 +16,7 @@ S.dredgeFailureCount=0;S.dredgeFailureZone=nil
 S.dredgeCurrentWork="Idle";S.dredgeNextWork="Awaiting plan"
 S.dredgeCapLastAt=-math.huge;S.dredgeCapLockedZone=nil
 S.dredgeCapLockedKey=nil;S.dredgeTurnAttempts=0
-      dredgeButton,dredgeStatus,show,stop
+dredgeButton,dredgeStatus,show,stop=nil,nil,nil,nil
       function dredgeText(str)
     if dredgeStatus then dredgeStatus.Text=str end
     -- Update GUI on every change, but keep Output quiet.
