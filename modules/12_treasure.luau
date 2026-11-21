@@ -1,20 +1,23 @@
 -- Galaxis module: 12_treasure.luau
--- Phase 1: read-only Treasure Map diagnostics. No remotes are fired.
+-- Read-only inspection of actual Treasure Map tools in the player's inventory.
 if S.treasureTitle then pcall(function() S.treasureTitle:Destroy() end) end
-if S.treasureNote then pcall(function() S.treasureNote:Destroy() end) end
+if S.treasureStatus then pcall(function() S.treasureStatus:Destroy() end) end
+if S.treasureScanButton then pcall(function() S.treasureScanButton:Destroy() end) end
+if S.treasureCopyButton then pcall(function() S.treasureCopyButton:Destroy() end) end
+if S.treasureOutput then pcall(function() S.treasureOutput:Destroy() end) end
 
 S.treasureTitle=label("AUTO TREASURE MAP",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("Phase 1: identify map items, destinations, prompts and remotes.",14,39,312,42,10,MUTED)
+S.treasureStatus=label("First check: do inventory maps contain destination coordinates, or only arrow / clue data?",14,39,312,42,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
-S.treasureScanButton=button("SCAN TREASURE SYSTEM",14,86,312,36,treasurePage)
-S.treasureCopyButton=button("COPY LAST SCAN",14,130,312,32,treasurePage)
+S.treasureScanButton=button("INSPECT INVENTORY MAPS",14,86,312,36,treasurePage)
+S.treasureCopyButton=button("COPY MAP INSPECTION",14,130,312,32,treasurePage)
 S.treasureCopyButton.BackgroundColor3=PANEL
 S.treasureOutput=make("TextBox",{
     Position=UDim2.fromOffset(14,170),Size=UDim2.new(1,-28,1,-184),
     BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
-    PlaceholderColor3=MUTED,PlaceholderText="Run a scan to inspect treasure-related game objects.",
+    PlaceholderColor3=MUTED,PlaceholderText="Put a Treasure Map in your inventory, then inspect it here.",
     Text="",ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,
     TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
     Font=Enum.Font.Code,TextSize=9
@@ -22,10 +25,10 @@ S.treasureOutput=make("TextBox",{
 S.treasureLastScan=nil
 S.treasureScanBusy=false
 
-local function treasurePath(obj)
+local function treasureObjectPath(obj)
     local names={}
     local current=obj
-    for _=1,12 do
+    for _=1,16 do
         if not current then break end
         table.insert(names,1,current.Name)
         current=current.Parent
@@ -33,151 +36,124 @@ local function treasurePath(obj)
     return table.concat(names,".")
 end
 
-local function treasureInteresting(name)
-    local n=string.lower(tostring(name))
-    return n:find("treasure",1,true) or n:find("buried",1,true)
-        or n:find("chest",1,true) or n:find("cache",1,true)
-        or n:find("crate",1,true) or n:find("map",1,true)
-        or n:find("digsite",1,true) or n:find("deposit",1,true)
-        or n:find("pharaoh",1,true) or n:find("sarcophagus",1,true)
-        or n:find("mastery",1,true)
+local function treasureIsMapTool(obj)
+    if not obj or not obj:IsA("Tool") then return false end
+    local n=string.lower(obj.Name)
+    local tip=""
+    pcall(function() tip=string.lower(obj.ToolTip or "") end)
+    return n:find("map",1,true)~=nil or n:find("treasure",1,true)~=nil
+        or tip:find("map",1,true)~=nil or tip:find("treasure",1,true)~=nil
 end
 
-local function treasureDescribe(obj)
-    local bits={obj.ClassName.." "..treasurePath(obj)}
-    if obj:IsA("Tool") then
-        local ok,tip=pcall(function() return obj.ToolTip end)
-        if ok and tip and tip~="" then table.insert(bits,"ToolTip="..tostring(tip)) end
-    end
+local function treasureDumpAttributes(lines,obj,prefix)
     local ok,attrs=pcall(function() return obj:GetAttributes() end)
     if ok then
-        for k,v in pairs(attrs) do
-            table.insert(bits,"@"..tostring(k).."="..tostring(v))
+        local keys={}
+        for k in pairs(attrs) do table.insert(keys,k) end
+        table.sort(keys)
+        for _,k in ipairs(keys) do
+            table.insert(lines,prefix.."Attribute "..tostring(k).." = "..tostring(attrs[k]))
         end
     end
-    if obj:IsA("ProximityPrompt") then
-        table.insert(bits,"ActionText="..tostring(obj.ActionText))
-        table.insert(bits,"ObjectText="..tostring(obj.ObjectText))
-        table.insert(bits,"Enabled="..tostring(obj.Enabled))
-        table.insert(bits,"Distance="..tostring(obj.MaxActivationDistance))
-        table.insert(bits,"Hold="..tostring(obj.HoldDuration))
-    elseif obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction") then
-        table.insert(bits,"REMOTE="..obj.ClassName)
-    elseif obj:IsA("ModuleScript") or obj:IsA("Script") or obj:IsA("LocalScript") then
-        table.insert(bits,"SCRIPT_SOURCE_READABLE="..tostring(pcall(function() return obj.Source end)))
-    end
-    return table.concat(bits," | ")
 end
 
-local function treasureScan()
+local function treasureInspectMap(lines,tool,index)
+    table.insert(lines,"")
+    table.insert(lines,"========== MAP "..index.." ==========")
+    table.insert(lines,"Name: "..tool.Name)
+    table.insert(lines,"Path: "..treasureObjectPath(tool))
+    table.insert(lines,"Class: "..tool.ClassName)
+    pcall(function() table.insert(lines,"ToolTip: "..tostring(tool.ToolTip)) end)
+    pcall(function() table.insert(lines,"TextureId: "..tostring(tool.TextureId)) end)
+    pcall(function() table.insert(lines,"RequiresHandle: "..tostring(tool.RequiresHandle)) end)
+    treasureDumpAttributes(lines,tool,"")
+    local descendants=tool:GetDescendants()
+    table.insert(lines,"Descendant count: "..#descendants)
+    for _,obj in ipairs(descendants) do
+        local path=treasureObjectPath(obj)
+        table.insert(lines,"["..obj.ClassName.."] "..path)
+        treasureDumpAttributes(lines,obj,"  ")
+        if obj:IsA("ValueBase") then
+            local valueText="  Value = "..tostring(obj.Value)
+            if obj:IsA("ObjectValue") and obj.Value then
+                valueText=valueText.." | Target = "..treasureObjectPath(obj.Value)
+            end
+            table.insert(lines,valueText)
+        elseif obj:IsA("Attachment") then
+            table.insert(lines,"  Position = "..tostring(obj.Position))
+            table.insert(lines,"  WorldPosition = "..tostring(obj.WorldPosition))
+        elseif obj:IsA("BasePart") then
+            table.insert(lines,"  Position = "..tostring(obj.Position))
+            table.insert(lines,"  CFrame = "..tostring(obj.CFrame))
+        elseif obj:IsA("ProximityPrompt") then
+            table.insert(lines,"  ActionText = "..obj.ActionText.." | ObjectText = "..obj.ObjectText)
+        elseif obj:IsA("ModuleScript") or obj:IsA("LocalScript") or obj:IsA("Script") then
+            table.insert(lines,"  Script object present (source not read).")
+        end
+    end
+end
+
+local function treasureInspectInventory()
     if S.treasureScanBusy or not S.alive then return end
     S.treasureScanBusy=true
-    S.treasureStatus.Text="Scanning ReplicatedStorage, player inventory and treasure-related world objects..."
+    S.treasureStatus.Text="Inspecting map Tools and every descendant / attribute..."
     task.spawn(function()
         local lines={
-            "GALAXIS TREASURE DIAGNOSTIC",
-            "Time: "..os.date("%Y-%m-%d %H:%M:%S"),
+            "GALAXIS - INVENTORY TREASURE MAP INSPECTION",
             "Player: "..P.Name,
+            "Time: "..os.date("%Y-%m-%d %H:%M:%S"),
+            "Purpose: determine whether map objects store coordinates or require arrow navigation.",
             "",
-            "=== PLAYER INVENTORY / CHARACTER ==="
+            "=== INVENTORY MAPS ==="
         }
-        local seen={}
-        local function add(obj)
-            if not obj or seen[obj] then return end
-            seen[obj]=true
-            table.insert(lines,treasureDescribe(obj))
-        end
         local backpack=P:FindFirstChild("BackpackTwo") or P:FindFirstChildOfClass("Backpack")
-        if backpack then
-            for _,obj in ipairs(backpack:GetDescendants()) do
-                if treasureInteresting(obj.Name) or obj:IsA("Tool") and treasureInteresting(obj.Name) then add(obj) end
-            end
-            for _,obj in ipairs(backpack:GetChildren()) do
-                if treasureInteresting(obj.Name) then add(obj) end
-            end
-        else
-            table.insert(lines,"Backpack not found")
-        end
-        if P.Character then
-            for _,obj in ipairs(P.Character:GetDescendants()) do
-                if treasureInteresting(obj.Name) then add(obj) end
-            end
-        end
-        table.insert(lines,"")
-        table.insert(lines,"=== REPLICATED STORAGE: TREASURE-RELATED OBJECTS ===")
-        local replicatedCount=0
-        for _,obj in ipairs(RS:GetDescendants()) do
-            if treasureInteresting(obj.Name) then
-                replicatedCount+=1
-                if replicatedCount<=500 then add(obj) end
-            end
-        end
-        table.insert(lines,"ReplicatedStorage matches: "..replicatedCount)
-        table.insert(lines,"")
-        table.insert(lines,"=== REMOTES WITH TREASURE / MAP / CHEST NAMES ===")
-        local remoteCount=0
-        for _,obj in ipairs(RS:GetDescendants()) do
-            if (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction"))
-                and treasureInteresting(obj.Name) then
-                remoteCount+=1
-                add(obj)
-            end
-        end
-        if remoteCount==0 then table.insert(lines,"No directly named treasure remotes found.") end
-        table.insert(lines,"")
-        table.insert(lines,"=== WORLD PROMPTS / TREASURE OBJECTS ===")
-        local map=workspace:FindFirstChild("Map")
-        local worldCount=0
-        if map then
-            for _,obj in ipairs(map:GetDescendants()) do
-                if obj:IsA("ProximityPrompt") then
-                    local parentName=obj.Parent and obj.Parent.Name or ""
-                    if treasureInteresting(obj.Name) or treasureInteresting(parentName)
-                        or treasureInteresting(treasurePath(obj.Parent or obj)) then
-                        worldCount+=1
-                        if worldCount<=300 then add(obj) end
-                    end
-                elseif treasureInteresting(obj.Name) then
-                    worldCount+=1
-                    if worldCount<=300 then add(obj) end
-                end
-            end
-        else
-            table.insert(lines,"Workspace.Map not found")
-        end
-        table.insert(lines,"World matches: "..worldCount)
-        table.insert(lines,"")
-        table.insert(lines,"=== PLAYER DATA TREASURE REFERENCES ===")
-        for _,child in ipairs(P:GetChildren()) do
-            if treasureInteresting(child.Name) then
-                add(child)
-                for _,obj in ipairs(child:GetDescendants()) do
-                    if treasureInteresting(obj.Name) then add(obj) end
+        local character=P.Character
+        local containers={}
+        if backpack then table.insert(containers,backpack) end
+        if character then table.insert(containers,character) end
+        local found={}
+        local inventoryNames={}
+        for _,container in ipairs(containers) do
+            for _,obj in ipairs(container:GetChildren()) do
+                if obj:IsA("Tool") then
+                    table.insert(inventoryNames,obj.Name)
+                    if treasureIsMapTool(obj) then table.insert(found,obj) end
                 end
             end
         end
+        table.insert(lines,"Backpack: "..tostring(backpack and backpack:GetFullName() or "NOT FOUND"))
+        table.insert(lines,"Map tools found: "..#found)
+        if #found==0 then
+            table.insert(lines,"No Tool with 'map' or 'treasure' in its name / tooltip was found.")
+        else
+            for i,tool in ipairs(found) do treasureInspectMap(lines,tool,i) end
+        end
         table.insert(lines,"")
-        table.insert(lines,"NOTE: Read-only scan. No map, chest, or reward remote was invoked.")
+        table.insert(lines,"=== ALL INVENTORY TOOL NAMES (FOR MAP NAME MATCHING) ===")
+        table.sort(inventoryNames)
+        for _,name in ipairs(inventoryNames) do table.insert(lines,name) end
+        table.insert(lines,"")
+        table.insert(lines,"=== INTERPRETATION HINTS ===")
+        table.insert(lines,"Vector3Value / CFrameValue / coordinate-like attributes may indicate stored destination coordinates.")
+        table.insert(lines,"StringValue / clue / direction fields may indicate text clues or arrow navigation.")
+        table.insert(lines,"ObjectValue may reference a map target or data object.")
+        table.insert(lines,"This scan is read-only: no map is used and no remote is fired.")
         local result=table.concat(lines,"\n")
         S.treasureLastScan=result
         S.treasureOutput.Text=result
-        S.treasureStatus.Text=string.format(
-            "Scan complete | RS matches: %d | world matches: %d | remotes: %d",
-            replicatedCount,worldCount,remoteCount)
-        S.diagEvent("TREASURE_DIAGNOSTIC",string.format(
-            "RS=%d world=%d remotes=%d chars=%d",
-            replicatedCount,worldCount,remoteCount,#result))
+        S.treasureStatus.Text=string.format("Inspection complete | map tools: %d | inventory tools: %d",#found,#inventoryNames)
+        S.diagEvent("TREASURE_MAP_INVENTORY_SCAN",string.format("maps=%d tools=%d chars=%d",#found,#inventoryNames,#result))
         S.treasureScanBusy=false
     end)
 end
 
-bind(S.treasureScanButton.MouseButton1Click,treasureScan)
+bind(S.treasureScanButton.MouseButton1Click,treasureInspectInventory)
 bind(S.treasureCopyButton.MouseButton1Click,function()
     if not S.treasureLastScan then
-        S.treasureStatus.Text="Run the scan first."
+        S.treasureStatus.Text="Inspect your inventory first."
         return
     end
     local ok=false
     if type(setclipboard)=="function" then ok=pcall(setclipboard,S.treasureLastScan) end
-    S.treasureStatus.Text=ok and "Diagnostic copied to clipboard." or "Clipboard unavailable; select the text below."
+    S.treasureStatus.Text=ok and "Map inspection copied to clipboard." or "Clipboard unavailable; select the text below."
 end)
