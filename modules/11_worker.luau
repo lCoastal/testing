@@ -68,6 +68,22 @@
 
     task.spawn(function()
         while valid(id) do
+            -- A treasure request takes priority over Dredge planning/travel.
+            if S.treasureRequested and S.treasureCycle then
+                local trOk,trErr=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
+                if not trOk then
+                    S.treasureLastError=tostring(trErr)
+                    if S.treasureStatus then
+                        S.treasureStatus.Text="Treasure error: "..S.treasureLastError
+                    end
+                    S.treasureRequested=false
+                end
+                if S.treasureBusy then
+                    repeat task.wait(.1) until not S.treasureBusy or not valid(id)
+                end
+                if not pause(.05,id) then break end
+                continue
+            end
             -- Quest turn-in/start requires no equipped pan. Previously a
             -- missing pan blocked the whole worker before it could walk
             -- back to the Dredge Master after re-enabling.
@@ -123,6 +139,24 @@
                 S.completion=nil
             end
             S.waiting=false
+
+            if valid(id) and reason=="TREASURE_REQUESTED" then
+                if S.treasureCycle then
+                    local trOk,trErr=pcall(S.treasureCycle,id,r)
+                    if not trOk then
+                        S.treasureLastError=tostring(trErr)
+                        if S.treasureStatus then
+                            S.treasureStatus.Text="Treasure error: "..S.treasureLastError
+                        end
+                        S.treasureRequested=false
+                    end
+                end
+                if S.treasureBusy then
+                    repeat task.wait(.1) until not S.treasureBusy or not valid(id)
+                end
+                if not pause(.05,id) then break end
+                continue
+            end
 
             if valid(id) then
                 S.traceCurrentAction=nil
