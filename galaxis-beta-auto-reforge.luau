@@ -3585,16 +3585,14 @@ bind(S.fallbackToggle.MouseButton1Click,function()
         or "Fallback disabled; normal Dredge behaviour."
 end)
 
--- Auto-craft Firefly Flares at the Lush Caverns Flare Table.
--- This is the same proximity prompt used by the manual action:
--- Workspace.Map.LushCaverns.AbyssAssets.FlareTable.Prompt
--- Craft action: 1 Firefly Stone; server validates inventory and range.
+-- Auto-craft Firefly Flares: equip one Firefly Stone from BackpackTwo,
+-- wait until it is actually held, then activate the existing FlareTable prompt.
 S.autoFlareCraftEnabled=false
 S.autoFlareCraftBusy=false
 S.autoFlareCraftNext=0
 S.autoFlareCraftButton=button("AUTO CRAFT FIREFLY FLARES: OFF",14,490,312,34,dredgePage)
 S.autoFlareCraftButton.TextSize=10
-S.autoFlareCraftStatus=label("Crafts at Flare Table when within 10 studs (1 Firefly Stone each).",14,528,312,30,10,MUTED)
+S.autoFlareCraftStatus=label("Equips Firefly Stone, then crafts at the nearby Flare Table.",14,528,312,30,10,MUTED)
 S.autoFlareCraftStatus.TextWrapped=true
 bind(S.autoFlareCraftButton.MouseButton1Click,function()
     S.autoFlareCraftEnabled=not S.autoFlareCraftEnabled
@@ -3603,51 +3601,89 @@ bind(S.autoFlareCraftButton.MouseButton1Click,function()
     S.autoFlareCraftButton.BackgroundColor3=S.autoFlareCraftEnabled
         and Color3.fromRGB(45,105,67) or PANEL
     S.autoFlareCraftStatus.Text=S.autoFlareCraftEnabled
-        and "Enabled: checks the Flare Table every 2 seconds."
+        and "Enabled: equips a Firefly Stone before every craft."
         or "Disabled."
     S.diagEvent("AUTO_FLARE_CRAFT_TOGGLE",tostring(S.autoFlareCraftEnabled))
 end)
 task.spawn(function()
     while S.alive do
-        task.wait(.5)
+        task.wait(.15)
         if S.autoFlareCraftEnabled and not S.autoFlareCraftBusy
             and os.clock()>=(S.autoFlareCraftNext or 0) then
-            S.autoFlareCraftNext=os.clock()+2
             local map=workspace:FindFirstChild("Map")
             local lush=map and map:FindFirstChild("LushCaverns")
             local abyss= lush and lush:FindFirstChild("AbyssAssets")
             local tableModel=abyss and abyss:FindFirstChild("FlareTable")
             local prompt=tableModel and tableModel:FindFirstChild("Prompt")
             local rr=root()
-            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and rr then
+            local pos
+            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
                 local part=prompt.Parent
-                local pos
                 if part and part:IsA("BasePart") then pos=part.Position
                 elseif tableModel and tableModel:IsA("Model") then pos=tableModel:GetPivot().Position end
-                local maxDistance=prompt.MaxActivationDistance or 10
-                if pos and (rr.Position-pos).Magnitude<=math.min(maxDistance,10) then
-                    S.autoFlareCraftBusy=true
-                    S.autoFlareCraftStatus.Text="Crafting Firefly Flare..."
-                    S.diagEvent("AUTO_FLARE_CRAFT_START","Flare Table prompt")
-                    local ok,err=pcall(function()
-                        if type(fireproximityprompt)=="function" then
-                            fireproximityprompt(prompt)
-                        else
-                            prompt:InputHoldBegin()
-                            task.wait(math.max(prompt.HoldDuration,.5)+.15)
-                            prompt:InputHoldEnd()
-                        end
-                    end)
-                    if ok then
-                        S.autoFlareCraftStatus.Text="Craft request sent. Next check in 2 seconds."
-                        S.diagEvent("AUTO_FLARE_CRAFT_SENT","1 Firefly Stone prompt activated")
-                    else
-                        S.autoFlareCraftStatus.Text="Craft prompt error: "..tostring(err):sub(1,90)
-                        S.diagEvent("AUTO_FLARE_CRAFT_ERROR",tostring(err))
+            end
+            local maxDistance=prompt and (prompt.MaxActivationDistance or 10) or 10
+            if prompt and pos and rr and (rr.Position-pos).Magnitude<=math.min(maxDistance,10) then
+                S.autoFlareCraftBusy=true
+                S.autoFlareCraftNext=os.clock()+.35
+                local ok,err=pcall(function()
+                    local backpack=P:FindFirstChild("BackpackTwo")
+                    local stone=backpack and backpack:FindFirstChild("Firefly Stone")
+                    if not stone then
+                        local character=P.Character
+                        stone=character and character:FindFirstChild("Firefly Stone")
                     end
-                    S.autoFlareCraftNext=os.clock()+2
-                    S.autoFlareCraftBusy=false
+                    if not stone then
+                        S.autoFlareCraftStatus.Text="No Firefly Stone in BackpackTwo."
+                        S.diagEvent("AUTO_FLARE_NO_STONE","Firefly Stone not found")
+                        return
+                    end
+                    local remotes=RS:FindFirstChild("Remotes")
+                    local custom=remotes and remotes:FindFirstChild("CustomBackpack")
+                    local equip=custom and custom:FindFirstChild("EquipRemote")
+                    if not equip or not equip:IsA("RemoteEvent") then
+                        error("CustomBackpack.EquipRemote unavailable")
+                    end
+                    local character=P.Character
+                    if not character or stone.Parent~=character then
+                        S.autoFlareCraftStatus.Text="Equipping Firefly Stone..."
+                        equip:FireServer(stone)
+                        local deadline=os.clock()+1.25
+                        repeat
+                            task.wait(.05)
+                            character=P.Character
+                        until not S.alive or (character and character:FindFirstChild("Firefly Stone"))
+                            or os.clock()>=deadline
+                        stone=character and character:FindFirstChild("Firefly Stone")
+                    end
+                    if not stone then
+                        S.autoFlareCraftStatus.Text="Firefly Stone equip did not complete."
+                        S.diagEvent("AUTO_FLARE_EQUIP_FAILED","Stone not found in Character")
+                        return
+                    end
+                    -- Recheck range and prompt immediately before crafting.
+                    rr=root()
+                    if not rr or (rr.Position-pos).Magnitude>math.min(maxDistance,10) then
+                        S.autoFlareCraftStatus.Text="Moved out of Flare Table range."
+                        return
+                    end
+                    S.autoFlareCraftStatus.Text="Crafting with equipped Firefly Stone..."
+                    if type(fireproximityprompt)=="function" then
+                        fireproximityprompt(prompt)
+                    else
+                        prompt:InputHoldBegin()
+                        task.wait(math.max(prompt.HoldDuration,.5)+.05)
+                        prompt:InputHoldEnd()
+                    end
+                    S.autoFlareCraftStatus.Text="Craft prompt sent. Checking again shortly."
+                    S.diagEvent("AUTO_FLARE_CRAFT_SENT","Equipped Firefly Stone; prompt activated")
+                end)
+                if not ok then
+                    S.autoFlareCraftStatus.Text="Auto craft error: "..tostring(err):sub(1,90)
+                    S.diagEvent("AUTO_FLARE_CRAFT_ERROR",tostring(err))
                 end
+                S.autoFlareCraftBusy=false
+                S.autoFlareCraftNext=os.clock()+.35
             end
         end
     end
