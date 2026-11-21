@@ -2688,21 +2688,31 @@ local function dredgeCycle(id)
         handleDredgeTransition(id,mode)
         return false
     end
+    local fallbackMode=false
+    local wants,done
     if mode=="unavailable" then
-        S.dredgeCurrentWork="Waiting for Dredge quest"
-        S.dredgeNextWork="Check quest availability"
-        dredgeText("Dredge Master not offering a quest: "..tostring(status.status))
-        return false
-    end
-    -- Server now confirms this quest is active, so allow a fresh transition
-    -- later without retrying the previous StartQuest or QuestTalked.
-    S.dredgeTransitionMode="active"
-    S.dredgeTransitionAttempts=0
-    local state=getQuest() or S.dredgeServerProgress
-    local wants,done=remaining(state)
-    if not wants then
-        dredgeText(tostring(done or "Waiting for StepProgress"))
-        return false
+        wants=S.getFallbackWants()
+        if not wants then
+            S.dredgeCurrentWork="Waiting for Dredge quest"
+            S.dredgeNextWork="Check quest availability"
+            dredgeText("No quest available; fallback is off or target is unknown")
+            return false
+        end
+        fallbackMode=true
+        done=false
+        S.dredgeCurrentWork="Fallback mineral: "..S.fallbackMineral
+        S.dredgeNextWork="Resume Dredge automatically when a quest appears"
+    else
+        -- Server now confirms this quest is active, so allow a fresh transition
+        -- later without retrying the previous StartQuest or QuestTalked.
+        S.dredgeTransitionMode="active"
+        S.dredgeTransitionAttempts=0
+        local state=getQuest() or S.dredgeServerProgress
+        wants,done=remaining(state)
+        if not wants then
+            dredgeText(tostring(done or "Waiting for StepProgress"))
+            return false
+        end
     end
     if done then
         S.dredgeCurrentWork="Mineral collection complete"
@@ -2772,6 +2782,17 @@ local function dredgeCycle(id)
     end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
+        if (not plan or not plan.stops[1]) and not fallbackMode then
+            local fallback=S.getFallbackWants()
+            if fallback then
+                S.diagEvent("DREDGE_FALLBACK_START",
+                    "Quest objective has no eligible zone; fallback="..S.fallbackMineral)
+                wants=fallback
+                fallbackMode=true
+                plan=bestRoute(wants,L,capacityNow)
+                S.dredgeCurrent=nil;S.dredgeGroup=nil
+            end
+        end
         if not plan or not plan.stops[1] then
             -- Being physically inside a deposit and owning a pan do not
             -- make a quest mineral obtainable there. Explain exactly which
@@ -2848,8 +2869,11 @@ local function dredgeCycle(id)
         S.dredgePlanRequired=plan.needed
     end
     local targetZone=baseDrop(S.dredgeCurrent)
-    S.dredgeCurrentWork=describeDredgeTargets(S.dredgeGroup,need).." @ "..targetZone
-    if S.dredgeNextStop then
+    S.dredgeCurrentWork=(fallbackMode and "FALLBACK: " or "")..
+        describeDredgeTargets(S.dredgeGroup,need).." @ "..targetZone
+    if fallbackMode then
+        S.dredgeNextWork="Return to quest objectives when eligible / available"
+    elseif S.dredgeNextStop then
         S.dredgeNextWork=describeDredgeTargets(S.dredgeNextStop.group,need)..
             " @ "..baseDrop(S.dredgeNextStop.z)
     elseif (S.dredgePlanCoverage or 0)<(S.dredgePlanRequired or 0) then
@@ -3508,6 +3532,60 @@ local dredgeWorkLabel=label("NOW: Idle\nNEXT: Waiting for quest",14,309,312,65,1
 dredgeWorkLabel.TextWrapped=true
 dredgeWorkLabel.TextYAlignment=Enum.TextYAlignment.Top
 relocate(dredgeWorkLabel,dredgePage,14,309)
+-- Idle / inaccessible-objective fallback mineral selector.
+S.fallbackMineral="Emerald"
+S.fallbackEnabled=false
+S.fallbackTitle=label("FALLBACK MINERAL (WHEN NO QUEST / NO ELIGIBLE QUEST DROP)",14,382,312,25,10,MUTED)
+S.fallbackTitle.TextWrapped=true
+relocate(S.fallbackTitle,dredgePage,14,382)
+S.fallbackInput=make("TextBox",{
+    Position=UDim2.fromOffset(14,411),
+    Size=UDim2.fromOffset(190,34),
+    BackgroundColor3=PANEL,
+    BorderSizePixel=0,
+    TextColor3=FG,
+    PlaceholderColor3=MUTED,
+    PlaceholderText="Mineral name (e.g. Emerald)",
+    Text=S.fallbackMineral,
+    ClearTextOnFocus=false,
+    Font=Enum.Font.Gotham,
+    TextSize=11
+},dredgePage)
+S.fallbackToggle=button("FALLBACK: OFF",212,411,114,34,dredgePage)
+S.fallbackToggle.TextSize=10
+S.fallbackStatus=label("Uses saved routes; Dredge quests stay priority.",14,449,312,30,10,MUTED)
+S.fallbackStatus.TextWrapped=true
+bind(S.fallbackInput.FocusLost,function()
+    local value=S.fallbackInput.Text:gsub("^%s+",""):gsub("%s+$","")
+    if value~="" then
+        S.fallbackMineral=value
+        S.dredgeCurrent=nil;S.dredgeGroup=nil
+        S.fallbackStatus.Text="Fallback target: "..value
+    end
+end)
+bind(S.fallbackToggle.MouseButton1Click,function()
+    S.fallbackEnabled=not S.fallbackEnabled
+    S.fallbackToggle.Text="FALLBACK: "..(S.fallbackEnabled and "ON" or "OFF")
+    S.fallbackToggle.BackgroundColor3=S.fallbackEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+    S.dredgeCurrent=nil;S.dredgeGroup=nil
+    S.fallbackStatus.Text=S.fallbackEnabled
+        and ("Will farm "..S.fallbackMineral.." when idle or quest drops are inaccessible.")
+        or "Fallback disabled; normal Dredge behaviour."
+end)
+function S.getFallbackWants()
+    if not S.fallbackEnabled then return nil end
+    local target=tostring(S.fallbackMineral or ""):lower()
+    if target=="" then return nil end
+    for _,zone in ipairs(ALL_ZONES) do
+        for _,drop in ipairs(poolFor(zone)) do
+            if tostring(drop[1]):lower()==target then
+                return {{m=drop[1],n=1}}
+            end
+        end
+    end
+    return nil
+end
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
