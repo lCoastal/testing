@@ -3601,6 +3601,7 @@ S.treasureNote=label(
 S.treasureNote.TextWrapped=true
 relocate(S.treasureNote,treasurePage,14,70)
 
+do
 -- ===== INFINITE / FOREVER PACK: READ-ONLY REWARD INSPECTOR =====
 -- GetForeverPackData exposes the current, next and all pre-generated
 -- rewards; never claim or purchase a tier. No reward odds are fabricated.
@@ -3761,6 +3762,8 @@ task.spawn(function()
         task.wait(2)
     end
 end)
+
+end -- PACK feature local scope; release locals before remaining UI setup.
 
 -- Manual reforge: only the currently held, reforgeable equipment.
 -- The game exposes ReforgeEquipment as a RemoteFunction. Invoke exactly
