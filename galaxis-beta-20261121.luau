@@ -3793,7 +3793,23 @@ local function heldReforgeItem()
     return nil
 end
 
-bind(S.reforgeButton.MouseButton1Click,function()
+S.reforgeKeybindEnabled=false
+S.reforgeKeybindButton=button("R KEYBIND: OFF",14,267,312,34,reforgePage)
+S.reforgeKeybindButton.TextSize=11
+S.reforgeKeybindButton.BackgroundColor3=PANEL
+local function refreshReforgeKeybind()
+    S.reforgeKeybindButton.Text="R KEYBIND: "..(S.reforgeKeybindEnabled and "ON" or "OFF")
+    S.reforgeKeybindButton.BackgroundColor3=S.reforgeKeybindEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+end
+bind(S.reforgeKeybindButton.MouseButton1Click,function()
+    S.reforgeKeybindEnabled=not S.reforgeKeybindEnabled
+    refreshReforgeKeybind()
+    S.reforgeStatus.Text=S.reforgeKeybindEnabled
+        and "Press R to reforge the equipment currently in your hand."
+        or "R keybind disabled. Manual reforge button remains available."
+end)
+S.reforgeNow=function()
     if not S.alive or S.reforgeBusy then return end
     local item=heldReforgeItem()
     if not item then
@@ -3832,7 +3848,8 @@ bind(S.reforgeButton.MouseButton1Click,function()
         S.reforgeBusy=false
         S.reforgeButton.Text="REFORGE HELD ITEM"
     end)
-end)
+end
+bind(S.reforgeButton.MouseButton1Click,S.reforgeNow)
 
 -- Live Debug: one glance at current action, zone, fill and stalled state.
 S.liveTitle=label("LIVE DEBUG  /  AUTO-SAVING",14,9,312,26,12,FG)
@@ -4956,10 +4973,13 @@ S.ToggleInterface=function()
     G.Enabled=not S.uiHidden
 end
 bind(UIS.InputBegan,function(input,gameProcessed)
-    if gameProcessed or input.UserInputType~=Enum.UserInputType.Keyboard
-        or input.KeyCode~=Enum.KeyCode.C then return end
-    if UIS:GetFocusedTextBox() then return end
-    S.ToggleInterface()
+    if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+    if gameProcessed or UIS:GetFocusedTextBox() then return end
+    if input.KeyCode==Enum.KeyCode.C then
+        S.ToggleInterface()
+    elseif input.KeyCode==Enum.KeyCode.R and S.reforgeKeybindEnabled then
+        S.reforgeNow()
+    end
 end)
 S.uiMinimized=false
 bind(Min.MouseButton1Click,function()
