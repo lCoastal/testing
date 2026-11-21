@@ -11,14 +11,19 @@ end
 -- Sales run separately, so digging is never blocked by selling.
       function autoSell(id,cycle)
     if not S.sell or not valid(id) or S.lastQueuedCycle==cycle then return end
-    for _,container in ipairs({P:FindFirstChild("BackpackTwo"),P:FindFirstChildOfClass("Backpack"),P.Character}) do
-        if container then
-            for _,item in ipairs(container:GetChildren()) do
-                if item:IsA("Tool") and string.lower(item.Name):find("chest",1,true)
-                    and not string.lower(item.Name):find("map",1,true) then
-                    S.diagEvent("SELL_SKIPPED_TREASURE_CHEST","Chest present; preserving inventory")
-                    return
-                end
+    local chestContainers={}
+    local customBag=P:FindFirstChild("BackpackTwo")
+    local normalBag=P:FindFirstChildOfClass("Backpack")
+    if customBag then chestContainers[#chestContainers+1]=customBag end
+    if normalBag then chestContainers[#chestContainers+1]=normalBag end
+    if P.Character then chestContainers[#chestContainers+1]=P.Character end
+    for _,container in ipairs(chestContainers) do
+        for _,item in ipairs(container:GetChildren()) do
+            local name=string.lower(item.Name)
+            if item:IsA("Tool") and name:find("chest",1,true)
+                and not name:find("map",1,true) then
+                S.diagEvent("SELL_SKIPPED_TREASURE_CHEST","Chest present; preserving inventory")
+                return
             end
         end
     end
