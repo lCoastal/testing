@@ -81,8 +81,8 @@ S.perfConnection=RunService.Heartbeat:Connect(function(dt)
     end
 end)
 -- TEMPORARY action trace. File I/O is batched in its own worker.
-S.actionTraceEnabled=true
-S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..".txt"
+S.actionTraceEnabled=false
+S.actionTraceFile="(disabled)"
       traceSuffix=1
 while fileExists(S.actionTraceFile) do
     traceSuffix+=1
@@ -99,13 +99,9 @@ S.actionTraceRolling={}
 S.actionTraceError=nil
 S.actionTraceWriting=false
 S.actionTraceReady=false
-if type(writefile)=="function" then
-    local ok,err=pcall(writefile,S.actionTraceFile,S.actionTraceHeader)
-    S.actionTraceReady=ok
-    if not ok then S.actionTraceError=tostring(err) end
-else
-    S.actionTraceError="writefile unavailable"
-end
+-- Automatic action-trace file creation is disabled.
+S.actionTraceReady=false
+S.actionTraceError="Disabled"
 function S.traceAction(kind,detail)
     if not S.actionTraceEnabled then return end
     local singleLine=(tostring(detail or ""):gsub("[\r\n]"," "))
@@ -151,18 +147,9 @@ function S.flushActionTrace()
     end
     S.actionTraceWriting=false
 end
-task.spawn(function()
-    while S.alive do
-        task.wait(1.25)
-        S.flushActionTrace()
-    end
-    S.flushActionTrace()
-end)
+-- No background action-trace worker.
 function S.diagEvent(kind,detail)
-    local line=os.date("%H:%M:%S").." | "..kind.." | "..tostring(detail or "")
-    S.DIAG_LOG[#S.DIAG_LOG+1]=line
-    if #S.DIAG_LOG>240 then table.remove(S.DIAG_LOG,1) end
-    if kind~="SAMPLE" then S.traceAction(kind,detail) end
+    -- Diagnostics disabled; intentionally no-op.
 end
 function S.traceBegin(name,detail)
     S.traceCurrentAction=name
@@ -504,8 +491,8 @@ function S.diagSnapshot()
 end
 -- Live Debug uses periodic snapshots independent of the action trace.
 -- Writes are buffered, bounded without appendfile, and never block a pan call.
-S.liveDebugEnabled=true
-S.liveDebugFile="GalaxisHub_LiveDebug_"..os.date("%Y%m%d_%H%M%S")..".txt"
+S.liveDebugEnabled=false
+S.liveDebugFile="(disabled)"
       liveSuffix=1
 while fileExists(S.liveDebugFile) do
     liveSuffix+=1
@@ -523,13 +510,9 @@ S.liveDebugFallback=false
 S.liveDebugLastState=nil
 S.liveDebugLastChangeAt=os.clock()
 S.liveDebugLastStallAt=0
-if type(writefile)=="function" then
-    local ok,err=pcall(writefile,S.liveDebugFile,S.liveDebugHeader)
-    S.liveDebugReady=ok
-    if not ok then S.liveDebugError=tostring(err) end
-else
-    S.liveDebugError="writefile unavailable"
-end
+-- Automatic live-debug file creation is disabled.
+S.liveDebugReady=false
+S.liveDebugError="Disabled"
 function S.liveDebugRecord(kind,detail)
     if not S.liveDebugEnabled then return end
     local flat=tostring(detail or ""):gsub("[\r\n]"," / ")
@@ -582,40 +565,7 @@ function S.liveDebugDetails()
         " | lastError="..tostring(S.diagLastFailure or "none")..
         " | "..S.diagSnapshot()
 end
-S.liveDebugRecord("START","Live debug initialized")
-task.spawn(function()
-    local lastSample=0
-    local lastFlush=0
-    while S.alive do
-        local now=os.clock()
-        local state=tostring(S.running).."|"..tostring(S.dredge).."|"..
-            tostring(S.diagPhase).."|"..tostring(S.traceCurrentAction).."|"..
-            tostring(S.dredgeAt or S.activeZone).."|"..tostring(S.dredgeCurrentWork)
-        if state~=S.liveDebugLastState then
-            S.liveDebugLastState=state
-            S.liveDebugLastChangeAt=now
-            S.liveDebugRecord("STATE_CHANGE",S.liveDebugDetails())
-        end
-        if now-lastSample>=(S.running and 2 or 8) then
-            lastSample=now
-            S.liveDebugRecord("SNAPSHOT",S.liveDebugDetails())
-        end
-        -- Detect a silent idle state even without an ACTION_START event.
-        if S.running and now-S.liveDebugLastChangeAt>=6
-            and now-S.liveDebugLastStallAt>=6 then
-            S.liveDebugLastStallAt=now
-            S.liveDebugRecord("POSSIBLE_STALL",
-                "State unchanged for "..string.format("%.1fs",now-S.liveDebugLastChangeAt)..
-                " | "..S.liveDebugDetails())
-        end
-        if now-lastFlush>=1.5 then
-            lastFlush=now
-            S.flushLiveDebug()
-        end
-        task.wait(.5)
-    end
-    S.flushLiveDebug()
-end)
+-- No periodic live-debug snapshots or file writes.
 
 function S.diagReport()
     local lines={
