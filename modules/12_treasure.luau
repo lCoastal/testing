@@ -104,6 +104,9 @@ local function tRestore(cp,id,lastRegion)
     elseif cp.dig and not move(cp.dig,id) then
         return false,"Could not return to saved dig position"
     end
+    if cp.dig and not move(cp.dig,id) then
+        return false,"Could not settle back at the exact saved dig position"
+    end
     S.dig,S.water=cp.dig,cp.water
     S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
     return true
