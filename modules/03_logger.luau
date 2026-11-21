@@ -68,15 +68,20 @@ end
     L.unsaved={}
     local chunk=table.concat(batch)
     local destination=FILE
-    local ok,err=pcall(function()
-        if type(appendfile)=="function" then
-            appendfile(destination,chunk)
-        elseif type(readfile)=="function" and type(writefile)=="function" then
-            writefile(destination,readfile(destination)..chunk)
+    local ok,err=false,nil
+    -- Prefer appendfile, but fall back to read+write if the executor exposes
+    -- appendfile but its implementation fails for this file.
+    if type(appendfile)=="function" then
+        ok,err=pcall(appendfile,destination,chunk)
+    end
+    if not ok and type(readfile)=="function" and type(writefile)=="function" then
+        local readOk,existing=pcall(readfile,destination)
+        if readOk and type(existing)=="string" then
+            ok,err=pcall(writefile,destination,existing..chunk)
         else
-            error("Executor lacks appendfile/readfile")
+            err="Could not read existing mineral log: "..tostring(existing)
         end
-    end)
+    end
     if ok then
         L.error=nil
     else
@@ -84,7 +89,7 @@ end
         for _,line in ipairs(batch) do retry[#retry+1]=line end
         for _,line in ipairs(L.unsaved) do retry[#retry+1]=line end
         L.unsaved=retry
-        L.error=tostring(err)
+        L.error=tostring(err or "No supported file-write API")
         outputWarning("mineral-file-"..tostring(err),"[GALAXIS HUB LOGGER] Write failure:",err)
     end
     L.writing=false
