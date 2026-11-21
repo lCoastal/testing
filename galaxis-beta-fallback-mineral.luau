@@ -3582,6 +3582,75 @@ bind(S.fallbackToggle.MouseButton1Click,function()
         and ("Will farm "..S.fallbackMineral.." when idle or quest drops are inaccessible.")
         or "Fallback disabled; normal Dredge behaviour."
 end)
+
+-- Auto-craft Firefly Flares at the Lush Caverns Flare Table.
+-- This is the same proximity prompt used by the manual action:
+-- Workspace.Map.LushCaverns.AbyssAssets.FlareTable.Prompt
+-- Craft action: 1 Firefly Stone; server validates inventory and range.
+S.autoFlareCraftEnabled=false
+S.autoFlareCraftBusy=false
+S.autoFlareCraftNext=0
+S.autoFlareCraftButton=button("AUTO CRAFT FIREFLY FLARES: OFF",14,490,312,34,dredgePage)
+S.autoFlareCraftButton.TextSize=10
+S.autoFlareCraftStatus=label("Crafts at Flare Table when within 10 studs (1 Firefly Stone each).",14,528,312,30,10,MUTED)
+S.autoFlareCraftStatus.TextWrapped=true
+bind(S.autoFlareCraftButton.MouseButton1Click,function()
+    S.autoFlareCraftEnabled=not S.autoFlareCraftEnabled
+    S.autoFlareCraftButton.Text="AUTO CRAFT FIREFLY FLARES: "..
+        (S.autoFlareCraftEnabled and "ON" or "OFF")
+    S.autoFlareCraftButton.BackgroundColor3=S.autoFlareCraftEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+    S.autoFlareCraftStatus.Text=S.autoFlareCraftEnabled
+        and "Enabled: checks the Flare Table every 2 seconds."
+        or "Disabled."
+    S.diagEvent("AUTO_FLARE_CRAFT_TOGGLE",tostring(S.autoFlareCraftEnabled))
+end)
+task.spawn(function()
+    while S.alive do
+        task.wait(.5)
+        if S.autoFlareCraftEnabled and not S.autoFlareCraftBusy
+            and os.clock()>=(S.autoFlareCraftNext or 0) then
+            S.autoFlareCraftNext=os.clock()+2
+            local map=workspace:FindFirstChild("Map")
+            local lush=map and map:FindFirstChild("LushCaverns")
+            local abyss= lush and lush:FindFirstChild("AbyssAssets")
+            local tableModel=abyss and abyss:FindFirstChild("FlareTable")
+            local prompt=tableModel and tableModel:FindFirstChild("Prompt")
+            local rr=root()
+            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled and rr then
+                local part=prompt.Parent
+                local pos
+                if part and part:IsA("BasePart") then pos=part.Position
+                elseif tableModel and tableModel:IsA("Model") then pos=tableModel:GetPivot().Position end
+                local maxDistance=prompt.MaxActivationDistance or 10
+                if pos and (rr.Position-pos).Magnitude<=math.min(maxDistance,10) then
+                    S.autoFlareCraftBusy=true
+                    S.autoFlareCraftStatus.Text="Crafting Firefly Flare..."
+                    S.diagEvent("AUTO_FLARE_CRAFT_START","Flare Table prompt")
+                    local ok,err=pcall(function()
+                        if type(fireproximityprompt)=="function" then
+                            fireproximityprompt(prompt)
+                        else
+                            prompt:InputHoldBegin()
+                            task.wait(math.max(prompt.HoldDuration,.5)+.15)
+                            prompt:InputHoldEnd()
+                        end
+                    end)
+                    if ok then
+                        S.autoFlareCraftStatus.Text="Craft request sent. Next check in 2 seconds."
+                        S.diagEvent("AUTO_FLARE_CRAFT_SENT","1 Firefly Stone prompt activated")
+                    else
+                        S.autoFlareCraftStatus.Text="Craft prompt error: "..tostring(err):sub(1,90)
+                        S.diagEvent("AUTO_FLARE_CRAFT_ERROR",tostring(err))
+                    end
+                    S.autoFlareCraftNext=os.clock()+2
+                    S.autoFlareCraftBusy=false
+                end
+            end
+        end
+    end
+end)
+
 function S.getFallbackWants()
     if not S.fallbackEnabled then return nil end
     local target=tostring(S.fallbackMineral or ""):lower()
