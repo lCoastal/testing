@@ -64,21 +64,23 @@ end
     sellQueue={},lastQueuedCycle=0,panFirstRejects=0,panReadyDelay=0}
       L={running=true,pending={},unsaved={},seen=setmetatable({},{__mode="k"}),pan=0,minerals=0,lastItem=0,error=nil,writing=false,logFile=FILE}
 S.DIAG_LOG={}
--- 1-second FPS window: one Heartbeat connection, zero per-frame allocations.
+-- 1-second FPS window, isolated in its own scope.
 -- This estimates rendering/game-loop health, not the cause of a slowdown.
-S.perfFPS=0
-S.perfFrameMs=0
-      perfCount,perfSeconds,perfElapsed=0,0,0
-perfConnection=RunService.Heartbeat:Connect(function(dt)
-    perfCount+=1
-    perfSeconds+=dt
-    perfElapsed+=dt
-    if perfElapsed>=1 then
-        S.perfFPS=perfSeconds>0 and perfCount/perfSeconds or 0
-        S.perfFrameMs=perfCount>0 and perfSeconds/perfCount*1000 or 0
-        perfCount,perfSeconds,perfElapsed=0,0,0
-    end
-end)
+do
+    S.perfFPS=0
+    S.perfFrameMs=0
+    local perfCount,perfSeconds,perfElapsed=0,0,0
+    S.perfConnection=RunService.Heartbeat:Connect(function(dt)
+        perfCount+=1
+        perfSeconds+=dt
+        perfElapsed+=dt
+        if perfElapsed>=1 then
+            S.perfFPS=perfSeconds>0 and perfCount/perfSeconds or 0
+            S.perfFrameMs=perfCount>0 and perfSeconds/perfCount*1000 or 0
+            perfCount,perfSeconds,perfElapsed=0,0,0
+        end
+    end)
+end
 -- TEMPORARY action trace. File I/O is batched in its own worker.
 S.actionTraceEnabled=true
 S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..".txt"
