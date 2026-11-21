@@ -73,6 +73,9 @@ end
 -- early movement, automatic tuning, or nested recovery state machine.
       function farming(id,r,target)
     while valid(id) do
+        if S.treasureRequested and not S.waiting then
+            return "TREASURE_REQUESTED"
+        end
         if S.dredge and not dredgeCycle(id) then
             if not valid(id) then return end
             if not pause(.3,id) then return end
@@ -94,6 +97,9 @@ end
         S.diagDigCalls=0
         for _=1,CFG.maxDig do
             if not valid(id) then return end
+            if S.treasureRequested and not S.waiting then
+                return "TREASURE_REQUESTED"
+            end
             local before=fill(r)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
@@ -138,6 +144,9 @@ end
         S.traceEnd("COLLECT_TO_CAPACITY","fill="..tostring(fill(r))..
             " / "..tostring(target).." calls="..tostring(S.diagDigCalls))
         if (fill(r) or 0)<target-.01 then return "Pan not full" end
+        if S.treasureRequested and not S.waiting then
+            return "TREASURE_REQUESTED"
+        end
         local digTime=os.clock()-cycleStart
 
         show("Panning")
