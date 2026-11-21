@@ -69,7 +69,6 @@ S.DIAG_LOG={}
 S.perfFPS=0
 S.perfFrameMs=0
       perfCount,perfSeconds,perfElapsed=0,0,0
-      perfConnection
 perfConnection=RunService.Heartbeat:Connect(function(dt)
     perfCount+=1
     perfSeconds+=dt
