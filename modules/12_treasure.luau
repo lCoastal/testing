@@ -167,7 +167,12 @@ end
 S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
     local n=#tMaps()
-    if n<2 then tStatus("AUTO ON | Waiting for maps ("..n.."/2)");return end
+    if n<2 then
+        S.treasureRequested=true
+        tStatus("AUTO ON | Waiting for maps ("..n.."/2)")
+        return
+    end
+    S.treasureRequested=false
     local ok,err=pcall(tRun,id)
     if not ok then
         S.treasureBusy=false
@@ -194,11 +199,22 @@ local function tRefresh()
 end
 bind(S.treasureToggle.MouseButton1Click,function()
     S.treasureEnabled=not S.treasureEnabled
+    if S.treasureEnabled then
+        local n=#tMaps()
+        if S.running then
+            S.treasureRequested=true
+            tStatus(n>=2
+                and "Treasure requested | Moving to maps after the current safe action."
+                or ("AUTO ON | Waiting for maps ("..n.."/2)"))
+        else
+            S.treasureRequested=false
+            tStatus("AUTO ON | Start Auto Farm/Dredge to travel to your maps.")
+        end
+    else
+        S.treasureRequested=false
+        tStatus(S.treasureBusy and "OFF | Stopping after current safe action." or "OFF")
+    end
     tRefresh()
-    tStatus(S.treasureEnabled
-        and (S.running and "AUTO ON | Waiting for 2 maps and the next completed pan cycle."
-            or "AUTO ON | Start Auto Farm/Dredge to process maps.")
-        or (S.treasureBusy and "OFF | Stopping after current safe action." or "OFF"))
     S.diagEvent("TREASURE_TOGGLE",tostring(S.treasureEnabled))
 end)
 bind(S.treasureScanButton.MouseButton1Click,tScan)
