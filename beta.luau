@@ -1,3 +1,8 @@
+-- GALAXIS BUILD: auto reforge with max-price and StatRolls target stops
+-- GALAXIS BUILD: auto Firefly Flare crafting toggle, 2s proximity timer
+-- GALAXIS BUILD: R-key reforge + configurable Dredge fallback mineral
+-- GALAXIS BUILD: optional R-key reforge binding
+-- GALAXIS FRESH BUILD 2026-11-21 | New path to bypass stale executor cache
 -- GALAXIS HUB | PROSPECTING BETA AUTO RECOVERY
 -- Experimental fast farm + independent TSV mineral logger
 -- Requires an executor with file APIs. Never toggles shovel activation.
@@ -2686,21 +2691,31 @@ local function dredgeCycle(id)
         handleDredgeTransition(id,mode)
         return false
     end
+    local fallbackMode=false
+    local wants,done
     if mode=="unavailable" then
-        S.dredgeCurrentWork="Waiting for Dredge quest"
-        S.dredgeNextWork="Check quest availability"
-        dredgeText("Dredge Master not offering a quest: "..tostring(status.status))
-        return false
-    end
-    -- Server now confirms this quest is active, so allow a fresh transition
-    -- later without retrying the previous StartQuest or QuestTalked.
-    S.dredgeTransitionMode="active"
-    S.dredgeTransitionAttempts=0
-    local state=getQuest() or S.dredgeServerProgress
-    local wants,done=remaining(state)
-    if not wants then
-        dredgeText(tostring(done or "Waiting for StepProgress"))
-        return false
+        wants=S.getFallbackWants()
+        if not wants then
+            S.dredgeCurrentWork="Waiting for Dredge quest"
+            S.dredgeNextWork="Check quest availability"
+            dredgeText("No quest available; fallback is off or target is unknown")
+            return false
+        end
+        fallbackMode=true
+        done=false
+        S.dredgeCurrentWork="Fallback mineral: "..S.fallbackMineral
+        S.dredgeNextWork="Resume Dredge automatically when a quest appears"
+    else
+        -- Server now confirms this quest is active, so allow a fresh transition
+        -- later without retrying the previous StartQuest or QuestTalked.
+        S.dredgeTransitionMode="active"
+        S.dredgeTransitionAttempts=0
+        local state=getQuest() or S.dredgeServerProgress
+        wants,done=remaining(state)
+        if not wants then
+            dredgeText(tostring(done or "Waiting for StepProgress"))
+            return false
+        end
     end
     if done then
         S.dredgeCurrentWork="Mineral collection complete"
@@ -2710,6 +2725,14 @@ local function dredgeCycle(id)
         dredgeText("Collection complete; waiting for server's talk step")
         return false
     end
+    -- Reset sticky route/group whenever switching between quest work and
+    -- fallback work; never keep farming a previous objective by accident.
+    if fallbackMode~=(S.dredgeFallbackActive==true) then
+        S.dredgeCurrent=nil
+        S.dredgeGroup=nil
+        S.dredgeNextStop=nil
+    end
+    S.dredgeFallbackActive=fallbackMode
     S.dredgeStartAt=nil
     local st=P:FindFirstChild("Stats")
     local raw=st and tonumber(st:GetAttribute("Luck"))
@@ -2770,6 +2793,17 @@ local function dredgeCycle(id)
     end
     if not keep then
         local plan=bestRoute(wants,L,capacityNow)
+        if (not plan or not plan.stops[1]) and not fallbackMode then
+            local fallback=S.getFallbackWants()
+            if fallback then
+                S.diagEvent("DREDGE_FALLBACK_START",
+                    "Quest objective has no eligible zone; fallback="..S.fallbackMineral)
+                wants=fallback
+                fallbackMode=true
+                plan=bestRoute(wants,L,capacityNow)
+                S.dredgeCurrent=nil;S.dredgeGroup=nil
+            end
+        end
         if not plan or not plan.stops[1] then
             -- Being physically inside a deposit and owning a pan do not
             -- make a quest mineral obtainable there. Explain exactly which
@@ -2846,8 +2880,11 @@ local function dredgeCycle(id)
         S.dredgePlanRequired=plan.needed
     end
     local targetZone=baseDrop(S.dredgeCurrent)
-    S.dredgeCurrentWork=describeDredgeTargets(S.dredgeGroup,need).." @ "..targetZone
-    if S.dredgeNextStop then
+    S.dredgeCurrentWork=(fallbackMode and "FALLBACK: " or "")..
+        describeDredgeTargets(S.dredgeGroup,need).." @ "..targetZone
+    if fallbackMode then
+        S.dredgeNextWork="Return to quest objectives when eligible / available"
+    elseif S.dredgeNextStop then
         S.dredgeNextWork=describeDredgeTargets(S.dredgeNextStop.group,need)..
             " @ "..baseDrop(S.dredgeNextStop.z)
     elseif (S.dredgePlanCoverage or 0)<(S.dredgePlanRequired or 0) then
@@ -3506,6 +3543,165 @@ local dredgeWorkLabel=label("NOW: Idle\nNEXT: Waiting for quest",14,309,312,65,1
 dredgeWorkLabel.TextWrapped=true
 dredgeWorkLabel.TextYAlignment=Enum.TextYAlignment.Top
 relocate(dredgeWorkLabel,dredgePage,14,309)
+-- Idle / inaccessible-objective fallback mineral selector.
+S.fallbackMineral="Emerald"
+S.fallbackEnabled=false
+S.fallbackTitle=label("FALLBACK MINERAL (WHEN NO QUEST / NO ELIGIBLE QUEST DROP)",14,382,312,25,10,MUTED)
+S.fallbackTitle.TextWrapped=true
+relocate(S.fallbackTitle,dredgePage,14,382)
+S.fallbackInput=make("TextBox",{
+    Position=UDim2.fromOffset(14,411),
+    Size=UDim2.fromOffset(190,34),
+    BackgroundColor3=PANEL,
+    BorderSizePixel=0,
+    TextColor3=FG,
+    PlaceholderColor3=MUTED,
+    PlaceholderText="Mineral name (e.g. Emerald)",
+    Text=S.fallbackMineral,
+    ClearTextOnFocus=false,
+    Font=Enum.Font.Gotham,
+    TextSize=11
+},dredgePage)
+S.fallbackToggle=button("FALLBACK: OFF",212,411,114,34,dredgePage)
+S.fallbackToggle.TextSize=10
+S.fallbackStatus=label("Uses saved routes; Dredge quests stay priority.",14,449,312,30,10,MUTED)
+S.fallbackStatus.TextWrapped=true
+bind(S.fallbackInput.FocusLost,function()
+    local value=S.fallbackInput.Text:gsub("^%s+",""):gsub("%s+$","")
+    if value~="" then
+        S.fallbackMineral=value
+        S.dredgeCurrent=nil;S.dredgeGroup=nil
+        S.fallbackStatus.Text="Fallback target: "..value
+    end
+end)
+bind(S.fallbackToggle.MouseButton1Click,function()
+    S.fallbackEnabled=not S.fallbackEnabled
+    S.fallbackToggle.Text="FALLBACK: "..(S.fallbackEnabled and "ON" or "OFF")
+    S.fallbackToggle.BackgroundColor3=S.fallbackEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+    S.dredgeCurrent=nil;S.dredgeGroup=nil
+    S.fallbackStatus.Text=S.fallbackEnabled
+        and ("Will farm "..S.fallbackMineral.." when idle or quest drops are inaccessible.")
+        or "Fallback disabled; normal Dredge behaviour."
+end)
+
+-- Auto-craft Firefly Flares: equip one Firefly Stone from BackpackTwo,
+-- wait until it is actually held, then activate the existing FlareTable prompt.
+S.autoFlareCraftEnabled=false
+S.autoFlareCraftBusy=false
+S.autoFlareCraftNext=0
+S.autoFlareCraftButton=button("AUTO CRAFT FIREFLY FLARES: OFF",14,490,312,34,dredgePage)
+S.autoFlareCraftButton.TextSize=10
+S.autoFlareCraftStatus=label("Equips Firefly Stone, then crafts at the nearby Flare Table.",14,528,312,30,10,MUTED)
+S.autoFlareCraftStatus.TextWrapped=true
+bind(S.autoFlareCraftButton.MouseButton1Click,function()
+    S.autoFlareCraftEnabled=not S.autoFlareCraftEnabled
+    S.autoFlareCraftButton.Text="AUTO CRAFT FIREFLY FLARES: "..
+        (S.autoFlareCraftEnabled and "ON" or "OFF")
+    S.autoFlareCraftButton.BackgroundColor3=S.autoFlareCraftEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+    S.autoFlareCraftStatus.Text=S.autoFlareCraftEnabled
+        and "Enabled: equips a Firefly Stone before every craft."
+        or "Disabled."
+    S.diagEvent("AUTO_FLARE_CRAFT_TOGGLE",tostring(S.autoFlareCraftEnabled))
+end)
+task.spawn(function()
+    while S.alive do
+        task.wait(.15)
+        if S.autoFlareCraftEnabled and not S.autoFlareCraftBusy
+            and os.clock()>=(S.autoFlareCraftNext or 0) then
+            local map=workspace:FindFirstChild("Map")
+            local lush=map and map:FindFirstChild("LushCaverns")
+            local abyss= lush and lush:FindFirstChild("AbyssAssets")
+            local tableModel=abyss and abyss:FindFirstChild("FlareTable")
+            local prompt=tableModel and tableModel:FindFirstChild("Prompt")
+            local rr=root()
+            local pos
+            if prompt and prompt:IsA("ProximityPrompt") and prompt.Enabled then
+                local part=prompt.Parent
+                if part and part:IsA("BasePart") then pos=part.Position
+                elseif tableModel and tableModel:IsA("Model") then pos=tableModel:GetPivot().Position end
+            end
+            local maxDistance=prompt and (prompt.MaxActivationDistance or 10) or 10
+            if prompt and pos and rr and (rr.Position-pos).Magnitude<=math.min(maxDistance,10) then
+                S.autoFlareCraftBusy=true
+                S.autoFlareCraftNext=os.clock()+.35
+                local ok,err=pcall(function()
+                    local backpack=P:FindFirstChild("BackpackTwo")
+                    local stone=backpack and backpack:FindFirstChild("Firefly Stone")
+                    if not stone then
+                        local character=P.Character
+                        stone=character and character:FindFirstChild("Firefly Stone")
+                    end
+                    if not stone then
+                        S.autoFlareCraftStatus.Text="No Firefly Stone in BackpackTwo."
+                        S.diagEvent("AUTO_FLARE_NO_STONE","Firefly Stone not found")
+                        return
+                    end
+                    local remotes=RS:FindFirstChild("Remotes")
+                    local custom=remotes and remotes:FindFirstChild("CustomBackpack")
+                    local equip=custom and custom:FindFirstChild("EquipRemote")
+                    if not equip or not equip:IsA("RemoteEvent") then
+                        error("CustomBackpack.EquipRemote unavailable")
+                    end
+                    local character=P.Character
+                    if not character or stone.Parent~=character then
+                        S.autoFlareCraftStatus.Text="Equipping Firefly Stone..."
+                        equip:FireServer(stone)
+                        local deadline=os.clock()+1.25
+                        repeat
+                            task.wait(.05)
+                            character=P.Character
+                        until not S.alive or (character and character:FindFirstChild("Firefly Stone"))
+                            or os.clock()>=deadline
+                        stone=character and character:FindFirstChild("Firefly Stone")
+                    end
+                    if not stone then
+                        S.autoFlareCraftStatus.Text="Firefly Stone equip did not complete."
+                        S.diagEvent("AUTO_FLARE_EQUIP_FAILED","Stone not found in Character")
+                        return
+                    end
+                    -- Recheck range and prompt immediately before crafting.
+                    rr=root()
+                    if not rr or (rr.Position-pos).Magnitude>math.min(maxDistance,10) then
+                        S.autoFlareCraftStatus.Text="Moved out of Flare Table range."
+                        return
+                    end
+                    S.autoFlareCraftStatus.Text="Crafting with equipped Firefly Stone..."
+                    if type(fireproximityprompt)=="function" then
+                        fireproximityprompt(prompt)
+                    else
+                        prompt:InputHoldBegin()
+                        task.wait(math.max(prompt.HoldDuration,.5)+.05)
+                        prompt:InputHoldEnd()
+                    end
+                    S.autoFlareCraftStatus.Text="Craft prompt sent. Checking again shortly."
+                    S.diagEvent("AUTO_FLARE_CRAFT_SENT","Equipped Firefly Stone; prompt activated")
+                end)
+                if not ok then
+                    S.autoFlareCraftStatus.Text="Auto craft error: "..tostring(err):sub(1,90)
+                    S.diagEvent("AUTO_FLARE_CRAFT_ERROR",tostring(err))
+                end
+                S.autoFlareCraftBusy=false
+                S.autoFlareCraftNext=os.clock()+.35
+            end
+        end
+    end
+end)
+
+function S.getFallbackWants()
+    if not S.fallbackEnabled then return nil end
+    local target=tostring(S.fallbackMineral or ""):lower()
+    if target=="" then return nil end
+    for _,zone in ipairs(ALL_ZONES) do
+        for _,drop in ipairs(poolFor(zone)) do
+            if tostring(drop[1]):lower()==target then
+                return {{m=drop[1],n=1}}
+            end
+        end
+    end
+    return nil
+end
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
@@ -3792,7 +3988,23 @@ local function heldReforgeItem()
     return nil
 end
 
-bind(S.reforgeButton.MouseButton1Click,function()
+S.reforgeKeybindEnabled=false
+S.reforgeKeybindButton=button("R KEYBIND: OFF",14,267,312,34,reforgePage)
+S.reforgeKeybindButton.TextSize=11
+S.reforgeKeybindButton.BackgroundColor3=PANEL
+local function refreshReforgeKeybind()
+    S.reforgeKeybindButton.Text="R KEYBIND: "..(S.reforgeKeybindEnabled and "ON" or "OFF")
+    S.reforgeKeybindButton.BackgroundColor3=S.reforgeKeybindEnabled
+        and Color3.fromRGB(45,105,67) or PANEL
+end
+bind(S.reforgeKeybindButton.MouseButton1Click,function()
+    S.reforgeKeybindEnabled=not S.reforgeKeybindEnabled
+    refreshReforgeKeybind()
+    S.reforgeStatus.Text=S.reforgeKeybindEnabled
+        and "Press R to reforge the equipment currently in your hand."
+        or "R keybind disabled. Manual reforge button remains available."
+end)
+S.reforgeNow=function()
     if not S.alive or S.reforgeBusy then return end
     local item=heldReforgeItem()
     if not item then
@@ -3831,7 +4043,133 @@ bind(S.reforgeButton.MouseButton1Click,function()
         S.reforgeBusy=false
         S.reforgeButton.Text="REFORGE HELD ITEM"
     end)
-end)
+end
+bind(S.reforgeButton.MouseButton1Click,S.reforgeNow)
+
+-- AUTO REFORGE: stop BEFORE spending when next cost reaches the cap,
+-- or when the chosen StatRolls attribute reaches its target.
+do
+    S.autoReforgeEnabled=false
+    S.autoReforgeBusy=false
+    S.autoReforgeCount=0
+    local function inputBox(parent,x,y,w,placeholder,default)
+        local box=make("TextBox",{
+            Position=UDim2.fromOffset(x,y),Size=UDim2.fromOffset(w,30),
+            BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
+            PlaceholderColor3=MUTED,PlaceholderText=placeholder,
+            Text=default or "",ClearTextOnFocus=false,
+            Font=Enum.Font.Gotham,TextSize=11
+        },parent)
+        return box
+    end
+    S.autoReforgePriceInput=inputBox(reforgePage,14,315,145,"Max cost (e.g. 1B)","1B")
+    S.autoReforgeStatInput=inputBox(reforgePage,168,315,92,"Stat name","Luck")
+    S.autoReforgeTargetInput=inputBox(reforgePage,267,315,59,"Target","100")
+    S.autoReforgeButton=button("AUTO REFORGE: OFF",14,352,312,34,reforgePage)
+    S.autoReforgeButton.TextSize=11
+    S.autoReforgeStatus=label("Stops before a reroll at max price OR when stat target is reached.",14,391,312,58,10,MUTED)
+    S.autoReforgeStatus.TextWrapped=true
+    local function parseReforgeNumber(value)
+        local raw=tostring(value or ""):upper():gsub("[%$, ]","")
+        local number,suffix=raw:match("^([%d%.]+)([KMBT]?)$")
+        number=tonumber(number)
+        if not number then return nil end
+        local multiplier=({K=1e3,M=1e6,B=1e9,T=1e12})[suffix] or 1
+        return number*multiplier
+    end
+    local function formatReforgeNumber(value)
+        if value>=1e12 then return string.format("%.3gT",value/1e12) end
+        if value>=1e9 then return string.format("%.3gB",value/1e9) end
+        if value>=1e6 then return string.format("%.3gM",value/1e6) end
+        return tostring(math.floor(value))
+    end
+    local function stopAutoReforge(message)
+        S.autoReforgeEnabled=false
+        S.autoReforgeBusy=false
+        S.autoReforgeButton.Text="AUTO REFORGE: OFF"
+        S.autoReforgeButton.BackgroundColor3=PANEL
+        S.autoReforgeStatus.Text=message
+        S.diagEvent("AUTO_REFORGE_STOP",message)
+    end
+    local function statReached(item,statName,target)
+        local rolls=item and item:FindFirstChild("StatRolls")
+        if not rolls then return false,nil end
+        local value=rolls:GetAttribute(statName)
+        if type(value)~="number" then return false,value end
+        return value>=target,value
+    end
+    local function autoReforgeLoop()
+        if S.autoReforgeBusy then return end
+        S.autoReforgeBusy=true
+        task.spawn(function()
+            while S.alive and S.autoReforgeEnabled do
+                local item=heldReforgeItem()
+                if not item then stopAutoReforge("Stopped: hold a reforgeable item first.");break end
+                local maxCost=parseReforgeNumber(S.autoReforgePriceInput.Text)
+                local statName=S.autoReforgeStatInput.Text:gsub("^%s+",""):gsub("%s+$","")
+                local target=parseReforgeNumber(S.autoReforgeTargetInput.Text)
+                if not maxCost or maxCost<=0 then
+                    stopAutoReforge("Invalid max price. Use e.g. 60M, 1B or 1T.");break
+                end
+                if statName~="" and not target then
+                    stopAutoReforge("Invalid target stat value.");break
+                end
+                if statName~="" then
+                    local reached,value=statReached(item,statName,target)
+                    if value==nil then
+                        stopAutoReforge("Stat '"..statName.."' not found in StatRolls.");break
+                    elseif reached then
+                        stopAutoReforge(statName.." reached "..tostring(value)..
+                            " (target "..tostring(target).."). "..S.autoReforgeCount.." rerolls.");break
+                    end
+                end
+                local remotes=RS:FindFirstChild("Remotes")
+                local crafting=remotes and remotes:FindFirstChild("Crafting")
+                local costRemote=crafting and crafting:FindFirstChild("GetReforgeCost")
+                local reforgeRemote=crafting and crafting:FindFirstChild("ReforgeEquipment")
+                if not costRemote or not costRemote:IsA("RemoteFunction")
+                    or not reforgeRemote or not reforgeRemote:IsA("RemoteFunction") then
+                    stopAutoReforge("GetReforgeCost / ReforgeEquipment unavailable.");break
+                end
+                local costOK,cost=pcall(function() return costRemote:InvokeServer(item) end)
+                if not costOK or type(cost)~="number" then
+                    stopAutoReforge("Could not read next reforge cost: "..tostring(cost));break
+                end
+                if cost>=maxCost then
+                    stopAutoReforge("Next cost "..formatReforgeNumber(cost)..
+                        " reached max "..formatReforgeNumber(maxCost)..
+                        ". "..S.autoReforgeCount.." rerolls completed.");break
+                end
+                S.autoReforgeStatus.Text=string.format(
+                    "Rerolls: %d | next cost: %s | %s target: %s",
+                    S.autoReforgeCount,formatReforgeNumber(cost),
+                    statName~="" and statName or "No stat",statName~="" and tostring(target) or "off")
+                local ok,result=pcall(function() return reforgeRemote:InvokeServer(item) end)
+                if not ok or result==false then
+                    stopAutoReforge("Reforge failed: "..tostring(result));break
+                end
+                S.autoReforgeCount+=1
+                S.diagEvent("AUTO_REFORGE_ROLL",item.Name.." | cost="..
+                    tostring(cost).." | result="..tostring(result))
+                task.wait(.65)
+            end
+            S.autoReforgeBusy=false
+        end)
+    end
+    bind(S.autoReforgeButton.MouseButton1Click,function()
+        if S.autoReforgeEnabled then
+            stopAutoReforge("Stopped manually after "..S.autoReforgeCount.." rerolls.")
+            return
+        end
+        S.autoReforgeCount=0
+        S.autoReforgeEnabled=true
+        S.autoReforgeButton.Text="AUTO REFORGE: ON"
+        S.autoReforgeButton.BackgroundColor3=Color3.fromRGB(45,105,67)
+        S.autoReforgeStatus.Text="Starting; checking price and target before every roll..."
+        autoReforgeLoop()
+    end)
+end
+
 
 -- Live Debug: one glance at current action, zone, fill and stalled state.
 S.liveTitle=label("LIVE DEBUG  /  AUTO-SAVING",14,9,312,26,12,FG)
@@ -4955,10 +5293,13 @@ S.ToggleInterface=function()
     G.Enabled=not S.uiHidden
 end
 bind(UIS.InputBegan,function(input,gameProcessed)
-    if gameProcessed or input.UserInputType~=Enum.UserInputType.Keyboard
-        or input.KeyCode~=Enum.KeyCode.C then return end
-    if UIS:GetFocusedTextBox() then return end
-    S.ToggleInterface()
+    if input.UserInputType~=Enum.UserInputType.Keyboard then return end
+    if gameProcessed or UIS:GetFocusedTextBox() then return end
+    if input.KeyCode==Enum.KeyCode.C then
+        S.ToggleInterface()
+    elseif input.KeyCode==Enum.KeyCode.R and S.reforgeKeybindEnabled then
+        S.reforgeNow()
+    end
 end)
 S.uiMinimized=false
 bind(Min.MouseButton1Click,function()
