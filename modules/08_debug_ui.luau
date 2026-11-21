@@ -1,8 +1,8 @@
 -- Galaxis module: 08_debug_ui.luau
 -- Loaded by beta.luau into the shared Galaxis environment.
-S.liveTitle=label("LIVE DEBUG  /  AUTO-SAVING",14,9,312,26,12,FG)
+S.liveTitle=label("LIVE DEBUG  /  DISABLED",14,9,312,26,12,FG)
 relocate(S.liveTitle,livePage,14,9)
-S.liveStatus=label("Starting diagnostics...",14,42,312,222,11,FG)
+S.liveStatus=label("Automatic diagnostics are disabled.",14,42,312,222,11,FG)
 relocate(S.liveStatus,livePage,14,42)
 S.liveStatus.TextWrapped=true
 S.liveStatus.TextYAlignment=Enum.TextYAlignment.Top
@@ -13,7 +13,7 @@ S.liveCopyButton=button("COPY LIVE DEBUG REPORT",14,314,312,36,livePage)
 S.mineralFileLabel=label("MINERAL LOG: "..FILE,14,352,312,30,10,MUTED)
 relocate(S.mineralFileLabel,livePage,14,352)
 S.mineralFileLabel.TextWrapped=true
-S.liveInfo=label("Log writes automatically. Copy report for support.",14,385,312,25,10,MUTED)
+S.liveInfo=label("Automatic logging disabled. Manual report export remains available.",14,385,312,25,10,MUTED)
 relocate(S.liveInfo,livePage,14,385)
 S.liveInfo.TextWrapped=true
 S.perfLabel=label("FPS: measuring... | Frame: measuring...",14,413,312,23,11,FG)
@@ -123,30 +123,7 @@ show=function(t)
         end
     end
 end
--- Diagnostic-only stall checks. Does not change farming timing or state.
-task.spawn(function()
-    while S.alive do
-        task.wait(.5)
-        if S.running and S.actionTraceEnabled then
-            local now=os.clock()
-            local stage=S.traceCurrentAction
-            local since=stage and S.traceActionStartedAt or S.diagPhaseStartedAt
-            local due=stage and S.traceNextStallAt or S.tracePhaseNextStallAt
-            if since and due and now>=due then
-                S.diagEvent("STALL",string.format("action=%s elapsed=%.2fs | %s",
-                    tostring(stage or S.diagPhase or "unknown"),
-                    now-since,S.diagSnapshot()))
-                if stage then S.traceNextStallAt=now+6
-                else S.tracePhaseNextStallAt=now+6 end
-            end
-            local work=tostring(S.dredgeCurrentWork or "")
-            if S.dredge and S.traceLastDredgeWork~=work then
-                S.traceLastDredgeWork=work
-                S.diagEvent("DREDGE_TASK",work)
-            end
-        end
-    end
-end)
+-- Automatic stall-monitor task removed; no periodic diagnostics.
 bind(S.antiAfkButton.MouseButton1Click,function()
     S.antiAfk=not S.antiAfk
     S.antiAfkButton.Text="ANTI-AFK: "..(S.antiAfk and "ON" or "OFF")
