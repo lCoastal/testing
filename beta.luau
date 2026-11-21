@@ -4946,11 +4946,13 @@ end)
 -- X handler was bound at window creation so it works even during startup.
 -- C toggles the entire UI without stopping automation or logging.
 -- Ignore typing in chat/text inputs and other consumed keypresses.
-local interfaceHidden=false
+-- Store transient UI interaction state on the existing S table instead
+-- of consuming five more top-level Luau local registers (limit: 200).
+S.uiHidden=false
 S.ToggleInterface=function()
     if not S.alive then return end
-    interfaceHidden=not interfaceHidden
-    G.Enabled=not interfaceHidden
+    S.uiHidden=not S.uiHidden
+    G.Enabled=not S.uiHidden
 end
 bind(UIS.InputBegan,function(input,gameProcessed)
     if gameProcessed or input.UserInputType~=Enum.UserInputType.Keyboard
@@ -4958,29 +4960,34 @@ bind(UIS.InputBegan,function(input,gameProcessed)
     if UIS:GetFocusedTextBox() then return end
     S.ToggleInterface()
 end)
-local minimized=false
+S.uiMinimized=false
 bind(Min.MouseButton1Click,function()
-    minimized=not minimized
-    Body.Visible=not minimized
-    W.Size=minimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,540)
-    Min.Text=minimized and "+" or "−"
+    S.uiMinimized=not S.uiMinimized
+    Body.Visible=not S.uiMinimized
+    W.Size=S.uiMinimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,540)
+    Min.Text=S.uiMinimized and "+" or "−"
 end)
-local dragging=false
-local dragStart,windowStart
+S.uiDragging=false
+S.uiDragStart=nil
+S.uiWindowStart=nil
 bind(H.InputBegan,function(i)
     if i.UserInputType==Enum.UserInputType.MouseButton1 then
-        dragging=true;dragStart=i.Position;windowStart=W.Position
+        S.uiDragging=true
+        S.uiDragStart=i.Position
+        S.uiWindowStart=W.Position
     end
 end)
 bind(UIS.InputChanged,function(i)
-    if dragging and S.alive and i.UserInputType==Enum.UserInputType.MouseMovement then
-        local d=i.Position-dragStart
-        W.Position=UDim2.new(windowStart.X.Scale,windowStart.X.Offset+d.X,
-            windowStart.Y.Scale,windowStart.Y.Offset+d.Y)
+    if S.uiDragging and S.alive and S.uiDragStart and S.uiWindowStart
+        and i.UserInputType==Enum.UserInputType.MouseMovement then
+        local d=i.Position-S.uiDragStart
+        local p=S.uiWindowStart
+        W.Position=UDim2.new(p.X.Scale,p.X.Offset+d.X,
+            p.Y.Scale,p.Y.Offset+d.Y)
     end
 end)
 bind(UIS.InputEnded,function(i)
-    if i.UserInputType==Enum.UserInputType.MouseButton1 then dragging=false end
+    if i.UserInputType==Enum.UserInputType.MouseButton1 then S.uiDragging=false end
 end)
 bind(P.CharacterRemoving,function()
     -- Do not turn the toggle OFF on respawn; the worker will retry when
