@@ -1,6 +1,7 @@
 -- GALAXIS HUB | MODULAR BETA LOADER
 -- Execute this file only. Feature code lives in /modules and shares one isolated environment.
 local BASE = "https://raw.githubusercontent.com/lCoastal/testing/main/modules/"
+local CACHE_BUSTER = tostring(os.time())
 local MODULES = {
     {"01_core.luau", "Core and shared services"},
     {"02_dredge.luau", "Dredge routing and quest engine"},
@@ -18,7 +19,7 @@ local parentEnv = getfenv()
 local sharedEnv = setmetatable({}, {__index = parentEnv})
 sharedEnv._G = sharedEnv
 local function loadModule(file, label)
-    local url = BASE .. file .. "?v=modular-1"
+    local url = BASE .. file .. "?v=" .. CACHE_BUSTER
     local okDownload, source = pcall(function()
         return game:HttpGet(url, true)
     end)
