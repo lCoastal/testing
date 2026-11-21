@@ -1,159 +1,217 @@
 -- Galaxis module: 12_treasure.luau
--- Read-only inspection of actual Treasure Map tools in the player's inventory.
-if S.treasureTitle then pcall(function() S.treasureTitle:Destroy() end) end
-if S.treasureStatus then pcall(function() S.treasureStatus:Destroy() end) end
-if S.treasureScanButton then pcall(function() S.treasureScanButton:Destroy() end) end
-if S.treasureCopyButton then pcall(function() S.treasureCopyButton:Destroy() end) end
-if S.treasureOutput then pcall(function() S.treasureOutput:Destroy() end) end
+-- Treasure automation. Runs only after a completed pan cycle.
+for _,k in ipairs({"treasureTitle","treasureStatus","treasureToggle","treasureScanButton","treasureOutput"}) do
+    if S[k] then pcall(function() S[k]:Destroy() end) end
+end
+S.treasureEnabled=S.treasureEnabled==true
+S.treasureBusy=false
+S.treasureCompleted=S.treasureCompleted or {}
+S.treasureAttempted=S.treasureAttempted or {}
+S.treasureLastError=nil
 
-S.treasureTitle=label("AUTO TREASURE MAP",14,10,312,25,13,FG)
+S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("First check: do inventory maps contain destination coordinates, or only arrow / clue data?",14,39,312,42,10,MUTED)
+S.treasureStatus=label("OFF | Starts after a completed pan when 2+ maps are held.",14,39,312,38,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
-S.treasureScanButton=button("INSPECT INVENTORY MAPS",14,86,312,36,treasurePage)
-S.treasureCopyButton=button("COPY MAP INSPECTION",14,130,312,32,treasurePage)
-S.treasureCopyButton.BackgroundColor3=PANEL
-S.treasureOutput=make("TextBox",{
-    Position=UDim2.fromOffset(14,170),Size=UDim2.new(1,-28,1,-184),
-    BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
-    PlaceholderColor3=MUTED,PlaceholderText="Put a Treasure Map in your inventory, then inspect it here.",
+S.treasureToggle=button("AUTO TREASURE: OFF",14,82,312,36,treasurePage)
+S.treasureScanButton=button("SCAN TREASURE MAPS",14,126,312,32,treasurePage)
+S.treasureScanButton.BackgroundColor3=PANEL
+S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,166),
+    Size=UDim2.new(1,-28,1,-180),BackgroundColor3=PANEL,BorderSizePixel=0,
+    TextColor3=FG,PlaceholderColor3=MUTED,PlaceholderText="Map inventory and route status.",
     Text="",ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,
     TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
-    Font=Enum.Font.Code,TextSize=9
-},treasurePage)
-S.treasureLastScan=nil
-S.treasureScanBusy=false
+    Font=Enum.Font.Code,TextSize=9},treasurePage)
 
-local function treasureObjectPath(obj)
-    local names={}
-    local current=obj
-    for _=1,16 do
-        if not current then break end
-        table.insert(names,1,current.Name)
-        current=current.Parent
-    end
-    return table.concat(names,".")
+local function tContainers()
+    local out={}
+    local bag=P:FindFirstChild("BackpackTwo") or P:FindFirstChildOfClass("Backpack")
+    if bag then out[#out+1]=bag end
+    if P.Character then out[#out+1]=P.Character end
+    return out
 end
-
-local function treasureIsMapTool(obj)
-    if not obj or not obj:IsA("Tool") then return false end
-    local n=string.lower(obj.Name)
-    local tip=""
-    pcall(function() tip=string.lower(obj.ToolTip or "") end)
-    return n:find("map",1,true)~=nil or n:find("treasure",1,true)~=nil
-        or tip:find("map",1,true)~=nil or tip:find("treasure",1,true)~=nil
-end
-
-local function treasureDumpAttributes(lines,obj,prefix)
-    local ok,attrs=pcall(function() return obj:GetAttributes() end)
-    if ok then
-        local keys={}
-        for k in pairs(attrs) do table.insert(keys,k) end
-        table.sort(keys)
-        for _,k in ipairs(keys) do
-            table.insert(lines,prefix.."Attribute "..tostring(k).." = "..tostring(attrs[k]))
-        end
-    end
-end
-
-local function treasureInspectMap(lines,tool,index)
-    table.insert(lines,"")
-    table.insert(lines,"========== MAP "..index.." ==========")
-    table.insert(lines,"Name: "..tool.Name)
-    table.insert(lines,"Path: "..treasureObjectPath(tool))
-    table.insert(lines,"Class: "..tool.ClassName)
-    pcall(function() table.insert(lines,"ToolTip: "..tostring(tool.ToolTip)) end)
-    pcall(function() table.insert(lines,"TextureId: "..tostring(tool.TextureId)) end)
-    pcall(function() table.insert(lines,"RequiresHandle: "..tostring(tool.RequiresHandle)) end)
-    treasureDumpAttributes(lines,tool,"")
-    local descendants=tool:GetDescendants()
-    table.insert(lines,"Descendant count: "..#descendants)
-    for _,obj in ipairs(descendants) do
-        local path=treasureObjectPath(obj)
-        table.insert(lines,"["..obj.ClassName.."] "..path)
-        treasureDumpAttributes(lines,obj,"  ")
-        if obj:IsA("ValueBase") then
-            local valueText="  Value = "..tostring(obj.Value)
-            if obj:IsA("ObjectValue") and obj.Value then
-                valueText=valueText.." | Target = "..treasureObjectPath(obj.Value)
-            end
-            table.insert(lines,valueText)
-        elseif obj:IsA("Attachment") then
-            table.insert(lines,"  Position = "..tostring(obj.Position))
-            table.insert(lines,"  WorldPosition = "..tostring(obj.WorldPosition))
-        elseif obj:IsA("BasePart") then
-            table.insert(lines,"  Position = "..tostring(obj.Position))
-            table.insert(lines,"  CFrame = "..tostring(obj.CFrame))
-        elseif obj:IsA("ProximityPrompt") then
-            table.insert(lines,"  ActionText = "..obj.ActionText.." | ObjectText = "..obj.ObjectText)
-        elseif obj:IsA("ModuleScript") or obj:IsA("LocalScript") or obj:IsA("Script") then
-            table.insert(lines,"  Script object present (source not read).")
-        end
-    end
-end
-
-local function treasureInspectInventory()
-    if S.treasureScanBusy or not S.alive then return end
-    S.treasureScanBusy=true
-    S.treasureStatus.Text="Inspecting map Tools and every descendant / attribute..."
-    task.spawn(function()
-        local lines={
-            "GALAXIS - INVENTORY TREASURE MAP INSPECTION",
-            "Player: "..P.Name,
-            "Time: "..os.date("%Y-%m-%d %H:%M:%S"),
-            "Purpose: determine whether map objects store coordinates or require arrow navigation.",
-            "",
-            "=== INVENTORY MAPS ==="
-        }
-        local backpack=P:FindFirstChild("BackpackTwo") or P:FindFirstChildOfClass("Backpack")
-        local character=P.Character
-        local containers={}
-        if backpack then table.insert(containers,backpack) end
-        if character then table.insert(containers,character) end
-        local found={}
-        local inventoryNames={}
-        for _,container in ipairs(containers) do
-            for _,obj in ipairs(container:GetChildren()) do
-                if obj:IsA("Tool") then
-                    table.insert(inventoryNames,obj.Name)
-                    if treasureIsMapTool(obj) then table.insert(found,obj) end
+local function tMaps()
+    local out={}
+    for _,bag in ipairs(tContainers()) do
+        for _,tool in ipairs(bag:GetChildren()) do
+            if tool:IsA("Tool") and tool.Name=="Treasure Map" then
+                local pos,region=tool:GetAttribute("Location"),tool:GetAttribute("Region")
+                local guid=tool:GetAttribute("GUID")
+                if typeof(pos)=="Vector3" and type(region)=="string" and region~="" then
+                    out[#out+1]={tool=tool,pos=pos,region=region,guid=tostring(guid or tool:GetDebugId())}
                 end
             end
         end
-        table.insert(lines,"Backpack: "..tostring(backpack and backpack:GetFullName() or "NOT FOUND"))
-        table.insert(lines,"Map tools found: "..#found)
-        if #found==0 then
-            table.insert(lines,"No Tool with 'map' or 'treasure' in its name / tooltip was found.")
-        else
-            for i,tool in ipairs(found) do treasureInspectMap(lines,tool,i) end
+    end
+    return out
+end
+local function tChestCount()
+    local n=0
+    for _,bag in ipairs(tContainers()) do
+        for _,obj in ipairs(bag:GetChildren()) do
+            if obj:IsA("Tool") then
+                local name=string.lower(obj.Name)
+                if name:find("chest",1,true) and not name:find("map",1,true) then n+=1 end
+            end
         end
-        table.insert(lines,"")
-        table.insert(lines,"=== ALL INVENTORY TOOL NAMES (FOR MAP NAME MATCHING) ===")
-        table.sort(inventoryNames)
-        for _,name in ipairs(inventoryNames) do table.insert(lines,name) end
-        table.insert(lines,"")
-        table.insert(lines,"=== INTERPRETATION HINTS ===")
-        table.insert(lines,"Vector3Value / CFrameValue / coordinate-like attributes may indicate stored destination coordinates.")
-        table.insert(lines,"StringValue / clue / direction fields may indicate text clues or arrow navigation.")
-        table.insert(lines,"ObjectValue may reference a map target or data object.")
-        table.insert(lines,"This scan is read-only: no map is used and no remote is fired.")
-        local result=table.concat(lines,"\n")
-        S.treasureLastScan=result
-        S.treasureOutput.Text=result
-        S.treasureStatus.Text=string.format("Inspection complete | map tools: %d | inventory tools: %d",#found,#inventoryNames)
-        S.diagEvent("TREASURE_MAP_INVENTORY_SCAN",string.format("maps=%d tools=%d chars=%d",#found,#inventoryNames,#result))
-        S.treasureScanBusy=false
-    end)
+    end
+    return n
+end
+local function tStatus(s)
+    if S.treasureStatus then S.treasureStatus.Text=s end
+    if S.treasureOutput then S.treasureOutput.Text=s end
+end
+local function tSort(list,origin)
+    local left,ordered=table.clone(list),{}
+    local at=origin
+    while #left>0 do
+        local best,dist=1,math.huge
+        for i,m in ipairs(left) do
+            local d=(at-m.pos).Magnitude
+            if d<dist then best,dist=i,d end
+        end
+        local m=table.remove(left,best)
+        ordered[#ordered+1]=m
+        at=m.pos
+    end
+    return ordered
+end
+local function tRegion(region,id)
+    local p=S.presets and S.presets[region]
+    if not p then return false,"No saved route for map region "..region end
+    local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(region))
+    if not wp then return false,"No mapped warp stone for "..region end
+    tStatus("Travelling to "..region.." via "..wp)
+    local ok,why=goWaypoint(wp,id)
+    if not ok then return false,why end
+    ok,why=walkFromStoneToZone(region,id)
+    if not ok then return false,why end
+    S.dredgeAt,S.activeZone=region,region
+    return true
+end
+local function tRestore(cp,id,lastRegion)
+    if cp.zone and S.presets and S.presets[cp.zone] then
+        local p=S.presets[cp.zone]
+        local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(cp.zone))
+        if wp then
+            if lastRegion then S.dredgeAt=lastRegion end
+            local ok,why=goWaypoint(wp,id)
+            if not ok then return false,"Return warp failed: "..tostring(why) end
+            ok,why=walkFromStoneToZone(cp.zone,id)
+            if not ok then return false,"Return route failed: "..tostring(why) end
+        end
+    elseif cp.dig and not move(cp.dig,id) then
+        return false,"Could not return to saved dig position"
+    end
+    S.dig,S.water=cp.dig,cp.water
+    S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
+    return true
 end
 
-bind(S.treasureScanButton.MouseButton1Click,treasureInspectInventory)
-bind(S.treasureCopyButton.MouseButton1Click,function()
-    if not S.treasureLastScan then
-        S.treasureStatus.Text="Inspect your inventory first."
-        return
+local function tRun(id)
+    if S.treasureBusy or not S.treasureEnabled or not valid(id) then return end
+    local list=tMaps()
+    if #list<2 then return end
+    S.treasureBusy=true
+    local cp={dig=S.dig,water=S.water,zone=S.dredge and S.dredgeAt or S.activeZone,dredgeAt=S.dredgeAt}
+    local lastRegion=S.dredgeAt
+    local oldSell=S.sell
+    local currentRegion=nil
+    local ordered=tSort(list,root() and root().Position or Vector3.zero)
+    local ok,err=true,nil
+    S.sell=false
+    S.diagEvent("TREASURE_ROUTE_START","maps="..#ordered)
+
+    for i,m in ipairs(ordered) do
+        if not valid(id) or not S.treasureEnabled then ok,err=false,"Stopped by user";break end
+        if not m.tool.Parent or S.treasureCompleted[m.guid] or S.treasureAttempted[m.guid] then continue end
+        if currentRegion~=m.region then
+            local reached,why=tRegion(m.region,id)
+            if not reached then ok,err=false,"Cannot reach "..m.region..": "..tostring(why);break end
+            currentRegion,lastRegion=m.region,m.region
+        end
+        S.treasureAttempted[m.guid]=true
+        tStatus(string.format("Map %d/%d | %s | travelling to target",i,#ordered,m.region))
+        local target=CFrame.new(m.pos)
+        if not move(target,id) or not stableAt(target,id,10,.35,3) then
+            ok,err=false,"Could not settle at map destination";break
+        end
+        local pan=panTool() or S.panInBackpack()
+        if not pan or not requirePanEquipped(pan,id) then
+            ok,err=false,"Could not equip pan at treasure location";break
+        end
+        local before=tChestCount()
+        S.diagEvent("TREASURE_DIG_ONCE",m.region.." | "..tostring(m.pos))
+        local sent,response,why=invoke(pan.dig,id,1)
+        if not sent then ok,err=false,"Dig request failed: "..tostring(why);break end
+        local found=false
+        local deadline=os.clock()+15
+        while valid(id) and os.clock()<deadline do
+            if tChestCount()>before then found=true;break end
+            task.wait(.15)
+        end
+        if not found then
+            ok,err=false,"Dig sent once; chest not verified. This map will not be dug again automatically."
+            break
+        end
+        S.treasureCompleted[m.guid]=true
+        S.diagEvent("TREASURE_CHEST_CONFIRMED",m.region.." | "..m.guid)
+        tStatus(string.format("Chest collected %d/%d | %s",i,#ordered,m.region))
     end
-    local ok=false
-    if type(setclipboard)=="function" then ok=pcall(setclipboard,S.treasureLastScan) end
-    S.treasureStatus.Text=ok and "Map inspection copied to clipboard." or "Clipboard unavailable; select the text below."
+
+    local returned,why=tRestore(cp,id,lastRegion)
+    if not returned then ok,err=false,(err and err.."; " or "").."RETURN FAILED: "..tostring(why) end
+    S.sell=oldSell
+    S.treasureBusy=false
+    if ok then
+        S.diagEvent("TREASURE_ROUTE_COMPLETE","maps="..#ordered)
+        tStatus("Treasure route complete. Returned to saved farming location.")
+    else
+        S.treasureLastError=tostring(err)
+        S.diagEvent("TREASURE_ROUTE_FAILED",S.treasureLastError)
+        tStatus("Treasure stopped: "..S.treasureLastError)
+    end
+end
+
+-- Hook called by 09_farming after a complete dig/pan/shake cycle.
+S.treasureCycle=function(id,r)
+    if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
+    local n=#tMaps()
+    if n<2 then tStatus("AUTO ON | Waiting for maps ("..n.."/2)");return end
+    local ok,err=pcall(tRun,id)
+    if not ok then
+        S.treasureBusy=false
+        S.treasureLastError=tostring(err)
+        tStatus("Treasure error: "..S.treasureLastError)
+        S.diagEvent("TREASURE_RUNTIME_ERROR",S.treasureLastError)
+    end
+end
+local function tScan()
+    local list=tMaps()
+    local lines={"GALAXIS TREASURE MAPS","Found: "..#list,""}
+    for i,m in ipairs(list) do
+        lines[#lines+1]=string.format("%d. %s | %.1f, %.1f, %.1f | %s",
+            i,m.region,m.pos.X,m.pos.Y,m.pos.Z,m.guid)
+    end
+    lines[#lines+1]=""
+    lines[#lines+1]="Auto Treasure: "..tostring(S.treasureEnabled)
+    lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
+    tStatus(table.concat(lines,"\n"))
+end
+local function tRefresh()
+    S.treasureToggle.Text=S.treasureEnabled and "AUTO TREASURE: ON" or "AUTO TREASURE: OFF"
+    S.treasureToggle.BackgroundColor3=S.treasureEnabled and Color3.fromRGB(49,83,62) or PANEL
+end
+bind(S.treasureToggle.MouseButton1Click,function()
+    S.treasureEnabled=not S.treasureEnabled
+    tRefresh()
+    tStatus(S.treasureEnabled
+        and (S.running and "AUTO ON | Waiting for 2 maps and the next completed pan cycle."
+            or "AUTO ON | Start Auto Farm/Dredge to process maps.")
+        or (S.treasureBusy and "OFF | Stopping after current safe action." or "OFF"))
+    S.diagEvent("TREASURE_TOGGLE",tostring(S.treasureEnabled))
 end)
+bind(S.treasureScanButton.MouseButton1Click,tScan)
+tRefresh()
+tScan()
