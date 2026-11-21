@@ -144,26 +144,44 @@ end
             tostring(zone).." -> "..tostring(zone).." (exact waypoint name)")
         return zone
     end
-    local entry=preset.route and preset.route[1]
-    local cf=entry and S.unpackCF(entry)
     local folder=S.waypointFolder()
-    if not cf or not folder then return nil end
+    if not folder then return nil end
+    -- Route recordings do not always begin beside the warp stone. Compare
+    -- every inbound/outbound checkpoint, plus dig/water, against each stone.
+    local anchors={}
+    for _,field in ipairs({"route","routeOut"}) do
+        for _,packed in ipairs(preset[field] or {}) do
+            local point=S.unpackCF(packed)
+            if point then anchors[#anchors+1]=point.Position end
+        end
+    end
+    for _,field in ipairs({"dig","water"}) do
+        local point=S.unpackCF(preset[field])
+        if point then anchors[#anchors+1]=point.Position end
+    end
+    if #anchors==0 then return nil end
     local best,bestDist=nil,math.huge
     for _,name in ipairs(WAYPOINT_NAMES) do
         local obj=folder:FindFirstChild(name)
         local stone=obj and S.getWaypointCF(obj)
         if stone then
-            local d=(stone.Position-cf.Position).Magnitude
-            if d<bestDist then best,bestDist=name,d end
+            for _,position in ipairs(anchors) do
+                local distance=(stone.Position-position).Magnitude
+                if distance<bestDist then best,bestDist=name,distance end
+            end
         end
     end
-    -- A missing/misaligned stone should never trigger blind travel.
-    if best and bestDist<=120 then
+    -- Require a reasonably close match; never guess a distant warp stone.
+    if best and bestDist<=250 then
         preset.waypoint=best
         S.diagEvent("DREDGE_WAYPOINT_RESOLVED",
-            string.format("%s -> %s (%.1f studs)",zone,best,bestDist))
+            string.format("%s -> %s (nearest recorded point %.1f studs)",
+                zone,best,bestDist))
         return best
     end
+    S.diagEvent("DREDGE_WAYPOINT_UNRESOLVED",
+        string.format("%s: nearest stone=%s distance=%.1f anchors=%d",
+            zone,tostring(best),bestDist,#anchors))
     return nil
 end
       function eligible(z,tier)
