@@ -136,6 +136,14 @@ end
     local preset=S.presets[zone]
     if not preset then return nil end
     if waypointIndex[preset.waypoint or ""] then return preset.waypoint end
+    -- Several zones share an identically named in-game fast-travel stone.
+    -- Prefer that exact, verified name before attempting route-coordinate inference.
+    if waypointIndex[zone] then
+        preset.waypoint=zone
+        S.diagEvent("DREDGE_WAYPOINT_RESOLVED",
+            tostring(zone).." -> "..tostring(zone).." (exact waypoint name)")
+        return zone
+    end
     local entry=preset.route and preset.route[1]
     local cf=entry and S.unpackCF(entry)
     local folder=S.waypointFolder()
