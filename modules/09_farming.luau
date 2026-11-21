@@ -11,6 +11,17 @@ end
 -- Sales run separately, so digging is never blocked by selling.
       function autoSell(id,cycle)
     if not S.sell or not valid(id) or S.lastQueuedCycle==cycle then return end
+    for _,container in ipairs({P:FindFirstChild("BackpackTwo"),P:FindFirstChildOfClass("Backpack"),P.Character}) do
+        if container then
+            for _,item in ipairs(container:GetChildren()) do
+                if item:IsA("Tool") and string.lower(item.Name):find("chest",1,true)
+                    and not string.lower(item.Name):find("map",1,true) then
+                    S.diagEvent("SELL_SKIPPED_TREASURE_CHEST","Chest present; preserving inventory")
+                    return
+                end
+            end
+        end
+    end
     S.lastQueuedCycle=cycle
     S.sellQueue[#S.sellQueue+1]={id=id,cycle=cycle,queuedAt=os.clock()}
     S.diagEvent("SELL_QUEUED","pan "..tostring(cycle))
@@ -228,5 +239,10 @@ end
             "cycle=%d total=%.3fs dig=%.3fs water=%.3fs pan=%.3fs shake=%.3fs",
             S.cycles,total,digTime,waterTime,panTime,os.clock()-shakeStart))
         autoSell(id,S.cycles)
+        -- Run treasure routing only after the full pan cycle has completed.
+        if S.treasureCycle then
+            local ok,err=pcall(S.treasureCycle,id,r)
+            if not ok then S.diagEvent("TREASURE_HOOK_ERROR",tostring(err)) end
+        end
     end
 end
