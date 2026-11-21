@@ -17,9 +17,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Configure Luau compiler
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLUAU_BUILD_CLI=ON
-        working-directory: /tmp
       - name: Build Luau compiler
         run: |
           git clone --depth 1 https://github.com/luau-lang/luau.git /tmp/luau
