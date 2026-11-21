@@ -77,43 +77,15 @@ local function tSort(list,origin)
     end
     return ordered
 end
-local function tWalkToWaypoint(wp,id)
-    local folder=S.waypointFolder()
-    local obj=folder and folder:FindFirstChild(wp or "")
-    local target=obj and S.getWaypointCF(obj)
-    if not target then return false,"Waypoint missing: "..tostring(wp) end
-    -- Treasure travel is WALK ONLY. Do not invoke goWaypoint/FastTravel.
-    return walkRoute(target,id,10000)
-end
-local function tRegion(region,id)
-    local p=S.presets and S.presets[region]
-    if not p then return false,"No saved route for map region "..region end
-    local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(region))
-    if not wp then return false,"No mapped warp stone for "..region end
-    tStatus("Running to "..region.." via "..wp)
-    local ok,why=tWalkToWaypoint(wp,id)
-    if not ok then return false,"Could not run to "..wp..": "..tostring(why) end
-    ok,why=walkFromStoneToZone(region,id)
-    if not ok then return false,why end
-    S.dredgeAt,S.activeZone=region,region
-    return true
-end
-local function tRestore(cp,id,lastRegion)
-    if cp.zone and S.presets and S.presets[cp.zone] then
-        local p=S.presets[cp.zone]
-        local wp=p.waypoint or (S.resolveDredgeWaypoint and S.resolveDredgeWaypoint(cp.zone))
-        if wp then
-            if lastRegion then S.dredgeAt=lastRegion end
-            local ok,why=tWalkToWaypoint(wp,id)
-            if not ok then return false,"Could not run back to "..wp..": "..tostring(why) end
-            ok,why=walkFromStoneToZone(cp.zone,id)
-            if not ok then return false,"Return route failed: "..tostring(why) end
-        end
-    elseif cp.dig and not move(cp.dig,id) then
-        return false,"Could not return to saved dig position"
-    end
-    if cp.dig and not move(cp.dig,id) then
-        return false,"Could not settle back at the exact saved dig position"
+-- Treasure collection is coordinate-driven: the map's Location is the
+-- destination. Do not resolve warp stones or invoke zone-routing helpers.
+local function tRestore(cp,id)
+    if not cp.dig then return false,"Original farming dig position was not saved" end
+    tStatus("Running back to the saved farming position")
+    local ok,why=walkRoute(cp.dig,id,10000)
+    if not ok then return false,"Could not run back to saved dig position: "..tostring(why) end
+    if not stableAt(cp.dig,id,12,.45,3) then
+        return false,"Could not settle at saved farming position"
     end
     S.dig,S.water=cp.dig,cp.water
     S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
@@ -126,9 +98,7 @@ local function tRun(id)
     if #list<2 then return end
     S.treasureBusy=true
     local cp={dig=S.dig,water=S.water,zone=S.dredge and S.dredgeAt or S.activeZone,dredgeAt=S.dredgeAt}
-    local lastRegion=S.dredgeAt
     local oldSell=S.sell
-    local currentRegion=nil
     local ordered=tSort(list,root() and root().Position or Vector3.zero)
     local ok,err=true,nil
     S.sell=false
@@ -137,16 +107,12 @@ local function tRun(id)
     for i,m in ipairs(ordered) do
         if not valid(id) or not S.treasureEnabled then ok,err=false,"Stopped by user";break end
         if not m.tool.Parent or S.treasureCompleted[m.guid] or S.treasureAttempted[m.guid] then continue end
-        if currentRegion~=m.region then
-            local reached,why=tRegion(m.region,id)
-            if not reached then ok,err=false,"Cannot reach "..m.region..": "..tostring(why);break end
-            currentRegion,lastRegion=m.region,m.region
-        end
+        -- The map's exact Location is the only destination; no zone/stone routing.
         S.treasureAttempted[m.guid]=true
-        tStatus(string.format("Map %d/%d | %s | travelling to target",i,#ordered,m.region))
+        tStatus(string.format("Map %d/%d | running directly to map coordinates in %s",i,#ordered,m.region))
         local target=CFrame.new(m.pos)
         -- Map destinations are approached on foot as well; no CFrame move/teleport.
-        local walked,walkWhy=walkRoute(target,id,1800)
+        local walked,walkWhy=walkRoute(target,id,10000)
         if not walked or not stableAt(target,id,12,.45,3) then
             ok,err=false,"Could not run to map destination: "..tostring(walkWhy);break
         end
@@ -173,7 +139,7 @@ local function tRun(id)
         tStatus(string.format("Chest collected %d/%d | %s",i,#ordered,m.region))
     end
 
-    local returned,why=tRestore(cp,id,lastRegion)
+    local returned,why=tRestore(cp,id)
     if not returned then ok,err=false,(err and err.."; " or "").."RETURN FAILED: "..tostring(why) end
     S.sell=oldSell
     S.treasureBusy=false
