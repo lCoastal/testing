@@ -249,5 +249,14 @@ end
             local ok,err=pcall(S.treasureCycle,id,r)
             if not ok then S.diagEvent("TREASURE_HOOK_ERROR",tostring(err)) end
         end
+        -- Once treasure has returned to the saved dig position, allow one
+        -- complete normal farm cycle before restoring the Dredge planner.
+        if S.treasureResumeDredgeAfterCycle
+            and S.cycles>=S.treasureResumeDredgeAfterCycle then
+            S.treasureResumeDredgeAfterCycle=nil
+            S.dredge=true
+            S.dredgeReadyAt=os.clock()+1.2
+            S.dredgeCurrentWork="Resuming Dredge after treasure route"
+        end
     end
 end
