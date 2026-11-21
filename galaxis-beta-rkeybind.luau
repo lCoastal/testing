@@ -2722,6 +2722,14 @@ local function dredgeCycle(id)
         dredgeText("Collection complete; waiting for server's talk step")
         return false
     end
+    -- Reset sticky route/group whenever switching between quest work and
+    -- fallback work; never keep farming a previous objective by accident.
+    if fallbackMode~=(S.dredgeFallbackActive==true) then
+        S.dredgeCurrent=nil
+        S.dredgeGroup=nil
+        S.dredgeNextStop=nil
+    end
+    S.dredgeFallbackActive=fallbackMode
     S.dredgeStartAt=nil
     local st=P:FindFirstChild("Stats")
     local raw=st and tonumber(st:GetAttribute("Luck"))
