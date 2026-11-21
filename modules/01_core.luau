@@ -83,12 +83,6 @@ end)
 -- TEMPORARY action trace. File I/O is batched in its own worker.
 S.actionTraceEnabled=false
 S.actionTraceFile="(disabled)"
-      traceSuffix=1
-while fileExists(S.actionTraceFile) do
-    traceSuffix+=1
-    S.actionTraceFile="GalaxisHub_ActionTrace_"..os.date("%Y%m%d_%H%M%S")..
-        "_"..traceSuffix..".txt"
-end
 S.actionTraceHeader="GALAXIS HUB BETA | ACTION TRACE | "..
     os.date("%Y-%m-%d %H:%M:%S").."\n"..
     "Timestamp | elapsed | pan | zone | event | details\n"
@@ -102,51 +96,8 @@ S.actionTraceReady=false
 -- Automatic action-trace file creation is disabled.
 S.actionTraceReady=false
 S.actionTraceError="Disabled"
-function S.traceAction(kind,detail)
-    if not S.actionTraceEnabled then return end
-    local singleLine=(tostring(detail or ""):gsub("[\r\n]"," "))
-    local line=string.format("%s | +%.3fs | pan %s | %s | %s | %s\n",
-        os.date("%Y-%m-%d %H:%M:%S"),os.clock()-S.actionTraceStart,
-        tostring(S.cycles+1),tostring(S.dredgeAt or S.activeZone or "none"),
-        tostring(kind),singleLine)
-    local queue=S.actionTraceQueue
-    queue[#queue+1]=line
-    if #queue>1000 then table.remove(queue,1) end
-    local tail=S.actionTraceTail
-    tail[#tail+1]=line
-    if #tail>360 then table.remove(tail,1) end
-end
-function S.flushActionTrace()
-    if S.actionTraceWriting or not S.actionTraceReady or #S.actionTraceQueue==0 then return end
-    S.actionTraceWriting=true
-    local batch=S.actionTraceQueue
-    S.actionTraceQueue={}
-    -- Without appendfile, keep a bounded rolling snapshot. Never reread a
-    -- growing file, which previously risked slowing the pan loop.
-    local rolling=S.actionTraceRolling
-    for _,line in ipairs(batch) do
-        rolling[#rolling+1]=line
-        if #rolling>550 then table.remove(rolling,1) end
-    end
-    local ok,err=false,nil
-    if type(appendfile)=="function" and not S.actionTraceFallback then
-        ok,err=pcall(appendfile,S.actionTraceFile,table.concat(batch))
-        if not ok then S.actionTraceFallback=true end
-    end
-    if not ok and type(writefile)=="function" then
-        ok,err=pcall(writefile,S.actionTraceFile,
-            S.actionTraceHeader..table.concat(rolling))
-    end
-    if not ok then
-        S.actionTraceError=tostring(err)
-        local queue=S.actionTraceQueue
-        for _,line in ipairs(batch) do queue[#queue+1]=line end
-        while #queue>1000 do table.remove(queue,1) end
-    else
-        S.actionTraceError=nil
-    end
-    S.actionTraceWriting=false
-end
+function S.traceAction(kind,detail) end
+function S.flushActionTrace() end
 -- No background action-trace worker.
 function S.diagEvent(kind,detail)
     -- Diagnostics disabled; intentionally no-op.
@@ -168,7 +119,7 @@ function S.traceEnd(name,detail)
         S.traceNextStallAt=nil
     end
 end
-S.traceAction("TRACE_START","Enabled on launch; buffered writes every 1.25s")
+-- Action trace startup disabled.
 E.CoastalSafeFarm=S
 -- Exact Waypoints names: saved as human-selected dig/water position presets.
 -- Only explicit LOAD PRESET changes the active farm coordinates.
@@ -493,11 +444,6 @@ end
 -- Writes are buffered, bounded without appendfile, and never block a pan call.
 S.liveDebugEnabled=false
 S.liveDebugFile="(disabled)"
-      liveSuffix=1
-while fileExists(S.liveDebugFile) do
-    liveSuffix+=1
-    S.liveDebugFile="GalaxisHub_LiveDebug_"..os.date("%Y%m%d_%H%M%S").."_"..liveSuffix..".txt"
-end
 S.liveDebugHeader="GALAXIS HUB BETA | LIVE DEBUG | "..os.date("%Y-%m-%d %H:%M:%S")..
     "\nSnapshot interval: 2s while farming, 8s while idle; buffered file writes\n"
 S.liveDebugQueue={}
@@ -513,46 +459,8 @@ S.liveDebugLastStallAt=0
 -- Automatic live-debug file creation is disabled.
 S.liveDebugReady=false
 S.liveDebugError="Disabled"
-function S.liveDebugRecord(kind,detail)
-    if not S.liveDebugEnabled then return end
-    local flat=tostring(detail or ""):gsub("[\r\n]"," / ")
-    local line=os.date("%Y-%m-%d %H:%M:%S").." | "..tostring(kind).." | "..flat.."\n"
-    local queue=S.liveDebugQueue
-    queue[#queue+1]=line
-    if #queue>400 then table.remove(queue,1) end
-    local recent=S.liveDebugRecent
-    recent[#recent+1]=line
-    if #recent>40 then table.remove(recent,1) end
-end
-function S.flushLiveDebug()
-    if S.liveDebugWriting or not S.liveDebugReady or #S.liveDebugQueue==0 then return end
-    S.liveDebugWriting=true
-    local batch=S.liveDebugQueue
-    S.liveDebugQueue={}
-    local rolling=S.liveDebugRolling
-    for _,line in ipairs(batch) do
-        rolling[#rolling+1]=line
-        if #rolling>900 then table.remove(rolling,1) end
-    end
-    local ok,err=false,nil
-    if type(appendfile)=="function" and not S.liveDebugFallback then
-        ok,err=pcall(appendfile,S.liveDebugFile,table.concat(batch))
-        if not ok then S.liveDebugFallback=true end
-    end
-    if not ok and type(writefile)=="function" then
-        ok,err=pcall(writefile,S.liveDebugFile,S.liveDebugHeader..table.concat(rolling))
-    end
-    if not ok then
-        S.liveDebugError=tostring(err)
-        for _,line in ipairs(batch) do
-            S.liveDebugQueue[#S.liveDebugQueue+1]=line
-        end
-        while #S.liveDebugQueue>400 do table.remove(S.liveDebugQueue,1) end
-    else
-        S.liveDebugError=nil
-    end
-    S.liveDebugWriting=false
-end
+function S.liveDebugRecord(kind,detail) end
+function S.flushLiveDebug() end
 function S.liveDebugDetails()
     local action=S.traceCurrentAction or "none"
     local age=S.traceActionStartedAt and (os.clock()-S.traceActionStartedAt) or 0
