@@ -98,7 +98,11 @@ local function tRun(id)
     if #list<2 then return end
     S.treasureBusy=true
     local cp={dig=S.dig,water=S.water,zone=S.dredge and S.dredgeAt or S.activeZone,dredgeAt=S.dredgeAt}
+    local oldDredge=S.dredge==true
     local oldSell=S.sell
+    -- Suspend the Dredge planner while the treasure route owns movement.
+    -- Resume it only after one complete farm cycle at the restored checkpoint.
+    S.dredge=false
     local ordered=tSort(list,root() and root().Position or Vector3.zero)
     local ok,err=true,nil
     S.sell=false
@@ -142,6 +146,12 @@ local function tRun(id)
     local returned,why=tRestore(cp,id)
     if not returned then ok,err=false,(err and err.."; " or "").."RETURN FAILED: "..tostring(why) end
     S.sell=oldSell
+    if ok and returned and oldDredge then
+        S.treasureResumeDredgeAfterCycle=(S.cycles or 0)+1
+    else
+        S.treasureResumeDredgeAfterCycle=nil
+    end
+    S.dredge=false
     S.treasureBusy=false
     if ok then
         S.diagEvent("TREASURE_ROUTE_COMPLETE","maps="..#ordered)
