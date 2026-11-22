@@ -9,8 +9,12 @@ S.treasureRequested=false
 S.treasureStandalone=false
 S.treasureMinMaps=math.clamp(math.floor(tonumber(E.GalaxisTreasureMinMaps) or 3),1,100)
 S.treasureNextTryAt=0
-S.treasureCompleted=S.treasureCompleted or {}
-S.treasureAttempted=S.treasureAttempted or {}
+-- Clear the old permanent attempt blacklist: it caused '6 maps, 0 eligible'
+-- after a failed run. Only the actual inventory determines map eligibility.
+S.treasureCompleted={}
+S.treasureAttempted={}
+S.treasureRetryAfter={}
+S.treasureTripSkipped={}
 S.treasureLastError=nil
 
 S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
@@ -59,13 +63,20 @@ local function tMaps()
     return out
 end
 local function tEligibleMaps()
-    local list={}
+    -- A real map remains eligible while it exists in inventory. Temporary
+    -- failures are filtered only when selecting a target for THIS trip.
+    return tMaps()
+end
+local function tReadyMaps(skipped)
+    local out={}
+    local now=os.clock()
     for _,m in ipairs(tMaps()) do
-        if not S.treasureCompleted[m.guid] and not S.treasureAttempted[m.guid] then
-            list[#list+1]=m
+        if (not skipped or not skipped[m.guid])
+            and now>=(S.treasureRetryAfter[m.guid] or 0) then
+            out[#out+1]=m
         end
     end
-    return list
+    return out
 end
 local function tEquippedPan(id)
     local held=panTool()
@@ -324,7 +335,7 @@ end
 
 local function tRun(id)
     if S.treasureBusy or not S.treasureEnabled or not valid(id) then return end
-    local list=tEligibleMaps()
+    local list=tReadyMaps()
     if #list<S.treasureMinMaps then return end
     S.treasureBusy=true
     local rr=root()
@@ -358,11 +369,19 @@ local function tRun(id)
     S.sell=false
     local initialCount=#list
     local steps=0
-    -- Re-scan after each dig: includes every new map obtained during this
-    -- trip, without needing to toggle Auto Dig or start another farm cycle.
+    local tripSkipped={}
+    -- Once a trip starts, keep collecting until the physical map inventory
+    -- is empty. If a map fails, defer only that item, not ALL future maps.
+    -- After visiting every reachable map, return and report any leftovers.
     while valid(id) and S.treasureEnabled do
-        local remaining=tEligibleMaps()
-        if #remaining==0 then break end
+        local allMaps=tMaps()
+        if #allMaps==0 then break end
+        local remaining=tReadyMaps(tripSkipped)
+        if #remaining==0 then
+            ok=false
+            err="Uncollected maps: "..#allMaps.." | retry after cooldown"
+            break
+        end
         steps+=1
         if steps>250 then
             ok,err=false,"Safety stop: 250 map destinations in a single trip"
@@ -384,7 +403,8 @@ local function tRun(id)
         local reached,travelWhy=tTravel(CFrame.new(m.pos),id,"map in "..m.region)
         if not reached then
             -- Skip a blocked map and continue collecting other maps.
-            S.treasureAttempted[m.guid]=true
+            tripSkipped[m.guid]=true
+            S.treasureRetryAfter[m.guid]=os.clock()+60
             failedThisRun+=1
             firstFailure=firstFailure or ("Unable to reach "..m.region..": "..tostring(travelWhy))
             continue
@@ -429,14 +449,17 @@ local function tRun(id)
             if attempt<3 then task.wait(.35) end
         end
         if not wasAccepted then
-            S.treasureAttempted[m.guid]=true
+            tripSkipped[m.guid]=true
+            S.treasureRetryAfter[m.guid]=os.clock()+60
             failedThisRun+=1
             firstFailure=firstFailure or
                 ("Treasure dig not accepted: "..tostring(why or response))
             continue
         end
         -- Do not send another dig for an accepted or uncertain request.
-        S.treasureAttempted[m.guid]=true
+        -- If the map survives, defer it to the next trip instead of
+        -- permanently hiding it from the map count.
+        tripSkipped[m.guid]=true
         local found=false
         local consumed=false
         local deadline=os.clock()+18
@@ -445,16 +468,17 @@ local function tRun(id)
             if beforeMap and m.tool.Parent==nil then consumed=true end
             task.wait(.15)
         end
-        if found then
-            S.treasureCompleted[m.guid]=true
+        if found or consumed then
+            -- Consuming the map is a valid map-resolution signal even if
+            -- the chest Tool has not replicated yet. Report it distinctly.
             completedThisRun+=1
-            tStatus(string.format("Collected %d chest(s) | %d map(s) left",
-                completedThisRun,#tEligibleMaps()))
+            tStatus(string.format("Resolved %d map(s) | %d still in inventory%s",
+                completedThisRun,#tMaps(),found and "" or " (chest unverified)"))
         else
+            S.treasureRetryAfter[m.guid]=os.clock()+90
             failedThisRun+=1
             firstFailure=firstFailure or
-                (consumed and "Map consumed but treasure chest not confirmed"
-                    or "Dig accepted, but no treasure chest detected in 18 seconds")
+                "Dig accepted, but map still present and no chest detected in 18 seconds"
         end
     end
 
@@ -463,8 +487,8 @@ local function tRun(id)
     end
     if failedThisRun>0 then
         ok=false
-        err=string.format("%d map(s) not verified: %s",
-            failedThisRun,tostring(firstFailure))
+        err=string.format("%d map(s) not verified; %d remain. First error: %s",
+            failedThisRun,#tMaps(),tostring(firstFailure))
     end
 
     local returned,why=tRestore(cp,id)
@@ -501,18 +525,20 @@ local function tRun(id)
     S.treasureWasDredge=nil
     if ok then
         S.diagEvent("TREASURE_ROUTE_COMPLETE","collected="..completedThisRun)
-        tStatus("Treasure done: "..completedThisRun.." chest(s). Returned to farming location.")
+        tStatus("Treasure complete: "..completedThisRun..
+            " map(s) resolved, "..#tMaps().." remaining. Returned to farming.")
     else
         S.treasureLastError=tostring(err)
         S.diagEvent("TREASURE_ROUTE_FAILED",S.treasureLastError)
-        tStatus("Treasure: "..completedThisRun.." collected; "..S.treasureLastError)
+        tStatus("Treasure: "..completedThisRun.." resolved, "..
+            #tMaps().." remaining; "..S.treasureLastError)
     end
 end
 
 -- One entry point works for the active farm worker and independent travel.
 S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
-    local n=#tEligibleMaps()
+    local n=#tReadyMaps()
     if n<S.treasureMinMaps then
         S.treasureRequested=false
         tStatus(string.format("AUTO DIG ON | Waiting for maps (%d/%d)",n,S.treasureMinMaps))
@@ -587,7 +613,7 @@ end
 local function tStandaloneLoop(id)
     local errors=0
     while valid(id) and S.treasureEnabled and not S.running do
-        if #tEligibleMaps()>=S.treasureMinMaps then
+        if #tReadyMaps()>=S.treasureMinMaps then
             if os.clock()>=(S.treasureNextTryAt or 0) then
                 S.treasureCycle(id,nil)
             else
@@ -633,7 +659,7 @@ task.spawn(function()
                 -- A pending pan finishes before the worker handles this.
                 S.treasureRequested=not S.treasureBusy
                     and os.clock()>=(S.treasureNextTryAt or 0)
-                    and #tEligibleMaps()>=S.treasureMinMaps
+                    and #tReadyMaps()>=S.treasureMinMaps
             elseif not S.treasureStandalone then
                 if S.dig and S.water then
                     S.treasureStandalone=true
@@ -660,8 +686,9 @@ end)
 
 local function tScan()
     local list=tMaps()
-    local available=tEligibleMaps()
-    local lines={"GALAXIS TREASURE MAPS","Maps: "..#list.." | eligible: "..#available,""}
+    local available=tReadyMaps()
+    local lines={"GALAXIS TREASURE MAPS","Maps in inventory: "..#list..
+        " | ready: "..#available.." | threshold: "..S.treasureMinMaps,""}
     for i,m in ipairs(list) do
         lines[#lines+1]=string.format("%d. %s | %.1f, %.1f, %.1f | %s",
             i,m.region,m.pos.X,m.pos.Y,m.pos.Z,m.guid)
