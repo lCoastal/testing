@@ -314,9 +314,11 @@ local function tRestore(cp,id)
     local home=cp.returnCF
     if not home then return false,"Original return position was not saved" end
     local ok,why=tTravel(home,id,"original dig/start position")
-    if not ok then return false,"Could not return: "..tostring(why) end
+    -- Restore the mining settings even if movement failed. This ensures
+    -- Dredge never inherits a treasure-map coordinate as its DIG/WATER.
     S.dig,S.water=cp.dig,cp.water
     S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
+    if not ok then return false,"Could not return: "..tostring(why) end
     return true
 end
 
@@ -326,18 +328,30 @@ local function tRun(id)
     if #list<S.treasureMinMaps then return end
     S.treasureBusy=true
     local rr=root()
+    local oldDredge=S.dredge==true and S.running==true
     local cp={
-        dig=S.dig,returnCF=S.dig or (rr and rr.CFrame),
+        dig=S.dig,
+        -- Dredge controls its OWN active dig spot and can change zones.
+        -- Always return to the exact position at interruption, not a stale
+        -- Auto Farm preset from an older quest.
+        returnCF=oldDredge and (rr and rr.CFrame)
+            or (S.dig or (rr and rr.CFrame)),
         water=S.water,
-        zone=S.dredge and S.dredgeAt or S.activeZone,
-        dredgeAt=S.dredgeAt
+        zone=oldDredge and S.dredgeAt or S.activeZone,
+        dredgeAt=S.dredgeAt,
+        riskZone=S.dredgeRiskZone
     }
-    local oldDredge=S.dredge==true
     S.treasureWasDredge=oldDredge
     local oldSell=S.sell
-    -- Suspend the Dredge planner while the treasure route owns movement.
-    -- Resume it only after one complete farm cycle at the restored checkpoint.
+    -- Temporary pause only. Keep the Dredge worker, wanted flag, quest
+    -- state, Luck Cap, route and toggle untouched while Treasure travels.
+    S.treasureDredgePaused=oldDredge
+    if oldDredge then
+        S.dredgeCurrentWork="PAUSED: collecting Treasure Maps"
+        S.dredgeNextWork="Resume current Dredge quest after treasure"
+    end
     S.dredge=false
+    S.dredgeRiskZone=false
     local ok,err=true,nil
     local completedThisRun,failedThisRun=0,0
     local firstFailure=nil
@@ -456,9 +470,28 @@ local function tRun(id)
     local returned,why=tRestore(cp,id)
     if not returned then ok,err=false,(err and err.."; " or "").."RETURN FAILED: "..tostring(why) end
     S.sell=oldSell
-    -- Restore the controller exactly as it was before the route.
-    -- Never turn Auto Farm or Auto Dredge on if they were originally off.
-    S.dredge=oldDredge and S.running and returned and true or false
+    -- Resume the EXISTING Dredge worker, never call startWorker/stop().
+    -- If the return route failed, clear stale location assumptions and let
+    -- its regular planner find the correct deposit on the next iteration.
+    if oldDredge and valid(id) and S.running then
+        S.dredge=true
+        if returned then
+            S.dredgeRiskZone=cp.riskZone
+            S.dredgeCurrentWork="Resuming Dredge quest after treasure"
+        else
+            S.dredgeAt=nil
+            S.dredgeCurrent=nil
+            S.dredgeGroup=nil
+            S.dredgeRiskZone=false
+            S.dredgeReadyAt=os.clock()+1
+            S.dredgeCurrentWork="Replanning Dredge after treasure return failure"
+        end
+        S.dredgeNextWork="Continue current Dredge quest"
+    else
+        S.dredge=false
+        S.dredgeRiskZone=cp.riskZone and S.running or false
+    end
+    S.treasureDredgePaused=false
     if not ok then
         S.treasureNextTryAt=os.clock()+20
     else
@@ -495,7 +528,18 @@ S.treasureCycle=function(id,r)
         S.treasureBusy=false
         S.treasureLastError=tostring(err)
         S.treasureNextTryAt=os.clock()+20
-        S.dredge=S.treasureWasDredge and S.running or false
+        -- An exception must not permanently turn an active Dredge toggle
+        -- into a farm worker. Force a fresh location plan if return failed.
+        if S.treasureWasDredge and S.running and valid(id) then
+            S.dredge=true
+            S.dredgeAt=nil
+            S.dredgeCurrent=nil
+            S.dredgeGroup=nil
+            S.dredgeRiskZone=false
+            S.dredgeReadyAt=os.clock()+1
+            S.dredgeCurrentWork="Replanning Dredge after Treasure error"
+        end
+        S.treasureDredgePaused=false
         S.treasureWasDredge=nil
         tStatus("Treasure error: "..S.treasureLastError)
     end
@@ -585,9 +629,11 @@ task.spawn(function()
         task.wait(.6)
         if S.treasureEnabled then
             if S.running then
-                if #tEligibleMaps()>=S.treasureMinMaps then
-                    S.treasureRequested=true
-                end
+                -- Never interrupt Dredge again during the retry cooldown.
+                -- A pending pan finishes before the worker handles this.
+                S.treasureRequested=not S.treasureBusy
+                    and os.clock()>=(S.treasureNextTryAt or 0)
+                    and #tEligibleMaps()>=S.treasureMinMaps
             elseif not S.treasureStandalone then
                 if S.dig and S.water then
                     S.treasureStandalone=true
