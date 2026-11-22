@@ -577,6 +577,78 @@ function S.recordEnchantedStep()
         path[#path+1]=r.Position
     end
 end
+-- Dredge-only fallback flight; called by walkRoute, never concurrently
+-- with its Humanoid pathfinding. Restore collisions and humanoid state even
+-- after cancellation, timeout, or an unexpected error.
+local function timedDredgeFlight(target,id)
+    if typeof(target)~="CFrame" or not valid(id) then
+        return false,"Invalid recovery target/session"
+    end
+    local character=P.Character
+    local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+    if not character or not humanoid or humanoid.Health<=0 or not root() then
+        return false,"Character unavailable for recovery flight"
+    end
+    local oldAuto=humanoid.AutoRotate
+    local oldPlatform=humanoid.PlatformStand
+    local collisions={}
+    local function disableCollision(obj)
+        if not obj:IsA("BasePart") then return end
+        if collisions[obj]==nil then collisions[obj]=obj.CanCollide end
+        obj.CanCollide=false
+    end
+    local hook=nil
+    local ok,err=pcall(function()
+        for _,part in ipairs(character:GetDescendants()) do disableCollision(part) end
+        hook=character.DescendantAdded:Connect(disableCollision)
+        humanoid.AutoRotate=false
+        humanoid.PlatformStand=true
+        local speed=42
+        local began=os.clock()
+        local previous=os.clock()
+        local startDistance=(root().Position-target.Position).Magnitude
+        local limit=math.clamp(startDistance/speed*3+12,12,160)
+        while valid(id) and S.dredge and S.dredgeWanted
+            and not S.treasureBusy and humanoid.Health>0
+            and os.clock()-began<limit do
+            local avatar=root()
+            if not avatar then break end
+            local delta=target.Position-avatar.Position
+            if delta.Magnitude<=7 then break end
+            local now=os.clock()
+            local dt=math.clamp(now-previous,1/120,.11)
+            previous=now
+            local step=math.min(delta.Magnitude,speed*dt)
+            avatar.AssemblyLinearVelocity=Vector3.zero
+            avatar.AssemblyAngularVelocity=Vector3.zero
+            avatar.CFrame=CFrame.new(avatar.Position+delta.Unit*step)*target.Rotation
+            task.wait()
+        end
+    end)
+    if hook then hook:Disconnect() end
+    for part,canCollide in pairs(collisions) do
+        if part.Parent then pcall(function() part.CanCollide=canCollide end) end
+    end
+    if humanoid.Parent then
+        humanoid.AutoRotate=oldAuto
+        humanoid.PlatformStand=oldPlatform
+    end
+    local avatar=root()
+    if avatar then
+        avatar.AssemblyLinearVelocity=Vector3.zero
+        avatar.AssemblyAngularVelocity=Vector3.zero
+    end
+    if not ok then return false,"Recovery flight exception: "..tostring(err) end
+    if not valid(id) then return false,"Recovery flight cancelled" end
+    if not avatar or (avatar.Position-target.Position).Magnitude>12 then
+        return false,"Flight could not reach checkpoint (server movement correction)"
+    end
+    if not stableAt(target,id,15,.35,2.5) then
+        return false,"Flight checkpoint did not remain stable"
+    end
+    return true
+end
+
       function walkRoute(cf,id,maxDistance,checkpoint)
     local r=root()
     local character=P.Character
@@ -611,7 +683,26 @@ end
     local rayParams=RaycastParams.new()
     rayParams.FilterType=Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances={character}
+    local function recoverFlightIfRequested()
+        if not S.timedZoneFlightRequested or not S.dredge then return nil end
+        S.timedZoneFlightRequested=false
+        S.timedZoneFlightActive=true
+        S.diagEvent("TIMED_ZONE_NOCLIP_START",
+            string.format("Target %.1f, %.1f, %.1f",
+                cf.Position.X,cf.Position.Y,cf.Position.Z))
+        local ok,why=timedDredgeFlight(cf,id)
+        S.timedZoneFlightActive=false
+        S.timedZoneFlightLastAt=os.clock()
+        S.timedZoneFlightLastResult=ok and "Reached checkpoint" or tostring(why)
+        S.diagEvent(ok and "TIMED_ZONE_NOCLIP_OK" or "TIMED_ZONE_NOCLIP_FAILED",
+            S.timedZoneFlightLastResult)
+        if ok then return true end
+        -- On failure leave regular retry/replanning active.
+        return false,why
+    end
     while valid(id) and os.clock()<deadline do
+        local flying,flightWhy=recoverFlightIfRequested()
+        if flying~=nil then return flying,flightWhy end
         r=root()
         if not r or hum.Health<=0 then return false,"Character lost while walking" end
         distance=(r.Position-cf.Position).Magnitude
@@ -673,6 +764,8 @@ end
                     local bestNodeDistance=walkingDist
                     local lastAdvance=os.clock()
                     while valid(id) and os.clock()<nodeDeadline do
+                        local flying,flightWhy=recoverFlightIfRequested()
+                        if flying~=nil then return flying,flightWhy end
                         r=root()
                         if not r or hum.Health<=0 then return false,"Character lost" end
                         local remaining=(r.Position-node.Position).Magnitude
