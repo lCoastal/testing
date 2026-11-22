@@ -11,22 +11,9 @@ end
 -- Sales run separately, so digging is never blocked by selling.
       function autoSell(id,cycle)
     if not S.sell or not valid(id) or S.lastQueuedCycle==cycle then return end
-    local chestContainers={}
-    local customBag=P:FindFirstChild("BackpackTwo")
-    local normalBag=P:FindFirstChildOfClass("Backpack")
-    if customBag then chestContainers[#chestContainers+1]=customBag end
-    if normalBag then chestContainers[#chestContainers+1]=normalBag end
-    if P.Character then chestContainers[#chestContainers+1]=P.Character end
-    for _,container in ipairs(chestContainers) do
-        for _,item in ipairs(container:GetChildren()) do
-            local name=string.lower(item.Name)
-            if item:IsA("Tool") and name:find("chest",1,true)
-                and not name:find("map",1,true) then
-                S.diagEvent("SELL_SKIPPED_TREASURE_CHEST","Chest present; preserving inventory")
-                return
-            end
-        end
-    end
+    -- Do not suppress all future sales because one Treasure Chest Tool
+    -- exists in inventory. SellAll's actual item filtering is server-owned.
+    -- Treasure routing temporarily sets S.sell=false to pause new requests.
     S.lastQueuedCycle=cycle
     S.sellQueue[#S.sellQueue+1]={id=id,cycle=cycle,queuedAt=os.clock()}
     S.diagEvent("SELL_QUEUED","pan "..tostring(cycle))
@@ -51,12 +38,20 @@ end
                     if r then
                         local startedAt=os.clock()
                         S.diagEvent("SELL_START","pan "..tostring(job.cycle))
-                        local ok,err=pcall(function() r:InvokeServer() end)
-                        S.diagEvent(ok and "SELL_END" or "SELL_ERROR",
+                        local ok,response=pcall(function() return r:InvokeServer() end)
+                        local accepted=ok and response~=false
+                        S.diagLastSellResponse=ok and tostring(response)
+                            or ("ERROR: "..tostring(response))
+                        S.diagLastSellCycle=job.cycle
+                        S.diagLastSellAt=os.clock()
+                        S.diagEvent(accepted and "SELL_END" or "SELL_ERROR",
                             string.format("pan %s | %.3fs | %s",
                                 tostring(job.cycle),os.clock()-startedAt,
-                                ok and "success" or tostring(err)))
-                        if not ok then show("Auto Sell failed on pan "..job.cycle) end
+                                S.diagLastSellResponse))
+                        if not accepted then
+                            show("Auto Sell failed/rejected on pan "..job.cycle..
+                                ": "..S.diagLastSellResponse:sub(1,60))
+                        end
                     else
                         S.sell=false
                         sellB.Text="AUTO SELL: OFF"
