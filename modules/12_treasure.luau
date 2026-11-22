@@ -235,7 +235,10 @@ local function tFlight(target,id,description)
     if not valid(id) or not S.treasureEnabled then return false,"Flight cancelled" end
     if not reached then return false,flightError or "Flight timed out / movement corrected" end
     -- Ensure the server did not rubber-band the avatar before we dig.
-    return stableAt(target,id,9,.35,2.5), "Flight destination not stable"
+    if not stableAt(target,id,9,.35,2.5) then
+        return false,"Flight destination was not stable"
+    end
+    return true
 end
 
 local function tMove(target,id,description,checkpoint)
