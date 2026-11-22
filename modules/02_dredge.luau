@@ -616,6 +616,8 @@ local function timedDredgeFlight(target,id)
     local function disableCollision(obj)
         if not obj:IsA("BasePart") then return end
         if collisions[obj]==nil then collisions[obj]=obj.CanCollide end
+        -- Per-frame enforcement below is intentional: character controllers
+        -- can restore collisions on torso and limbs while flying.
         obj.CanCollide=false
     end
     local hook=nil
@@ -624,7 +626,7 @@ local function timedDredgeFlight(target,id)
         hook=character.DescendantAdded:Connect(disableCollision)
         humanoid.AutoRotate=false
         humanoid.PlatformStand=true
-        local speed=42
+        local speed=math.clamp(tonumber(E.GalaxisDredgeNoclipSpeed) or 125,50,250)
         local began=os.clock()
         local previous=os.clock()
         local startDistance=(root().Position-target.Position).Magnitude
@@ -634,6 +636,14 @@ local function timedDredgeFlight(target,id)
             and os.clock()-began<limit do
             local avatar=root()
             if not avatar then break end
+            -- True character noclip, not just an airborne MoveTo:
+            -- keep every character BasePart non-collidable throughout
+            -- each flight step, even if game scripts reset them.
+            for _,part in ipairs(character:GetDescendants()) do
+                if part:IsA("BasePart") then
+                    disableCollision(part)
+                end
+            end
             local delta=target.Position-avatar.Position
             if delta.Magnitude<=7 then break end
             local now=os.clock()
