@@ -87,6 +87,16 @@ end
         local moved=farmMove(S.dig,id)
         S.traceEnd("MOVE_TO_DIG","success="..tostring(moved))
         if not moved then return "Dig teleport failed" end
+        if S.treasureStandalone and not S.running then
+            -- Server-side Collect can reject immediately after a teleport.
+            -- Require a stable DIG position before the FIRST dig request.
+            if not stableAt(S.dig,id,6,.3,3) then
+                return "Dig position unstable: teleport was not accepted by the server"
+            end
+            if S.treasureStatus then
+                S.treasureStatus.Text="Farming maps | DIG position confirmed; filling pan"
+            end
+        end
 
         S.traceBegin("COLLECT_TO_CAPACITY",tostring(fill(r)).." / "..tostring(target))
         local lastProgress=os.clock()
@@ -97,6 +107,19 @@ end
             local before=fill(r)
             if before==nil then return "Fill unavailable" end
             if before>=target-.01 then break end
+            if S.treasureStandalone and not S.running then
+                if not requirePanEquipped(r,id) then
+                    return "Treasure farm: pan not equipped for Collect"
+                end
+                if not ensureFarmPosition(S.dig,id,"TREASURE_COLLECT") then
+                    return "Treasure farm: could not hold DIG position"
+                end
+                if S.treasureStatus then
+                    S.treasureStatus.Text=string.format(
+                        "Farming maps | DIG Collect | fill %.1f / %.1f",
+                        before,target)
+                end
+            end
             local sent=os.clock()
             S.diagCollectPendingAt=sent
             local ok,response,err=invoke(r.dig,id,1)
@@ -116,6 +139,21 @@ end
             end
             if not pause(S.timing("dig"),id) then return end
             local after=fill(r)
+            if S.treasureStandalone and not S.running and (not after or after<=before+.001) then
+                -- One extra replication window after a Collect response.
+                -- Don't change the normal Auto Farm turbo pacing.
+                local untilAt=os.clock()+.65
+                while valid(id) and os.clock()<untilAt do
+                    task.wait(.05)
+                    after=fill(r)
+                    if after and after>before+.001 then break end
+                end
+                if not after or after<=before+.001 then
+                    return "Treasure farm: Collect did not increase pan Fill ("
+                        ..tostring(before).." -> "..tostring(after)
+                        .."); check DIG deposit and shovel"
+                end
+            end
             if after and after>before+.001 then
                 lastProgress=os.clock()
                 S.diagDigProgressAt=lastProgress
@@ -146,6 +184,14 @@ end
         moved=farmMove(S.water,id)
         S.traceEnd("MOVE_TO_WATER","success="..tostring(moved))
         if not moved then return "Water teleport failed" end
+        if S.treasureStandalone and not S.running then
+            if not stableAt(S.water,id,6,.3,3) then
+                return "Water position unstable: teleport was not accepted by the server"
+            end
+            if S.treasureStatus then
+                S.treasureStatus.Text="Farming maps | PANNING full pan"
+            end
+        end
         if S.dredge and S.water then
             local avatar=root()
             local remaining=avatar and
@@ -176,9 +222,9 @@ end
             local ok,response,err=invoke(r.pan,id)
             if not ok then return "Pan call failed: "..tostring(err) end
             if response==true then accepted=true;break end
-            -- Dredge only: correct a server snapback after a rejection.
-            -- Regular Auto Farm keeps the original turbo retry loop.
-            if S.dredge then
+            -- Dredge and independent Treasure farming can repair pan-water
+            -- drift after explicit server rejection. Regular Farm unchanged.
+            if S.dredge or (S.treasureStandalone and not S.running) then
                 local avatar=root()
                 local drift=avatar and S.water and
                     (avatar.Position-S.water.Position).Magnitude or math.huge
