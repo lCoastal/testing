@@ -135,7 +135,7 @@ stop=function()
     end
     if dredgeButton then dredgeButton.Text="AUTO DREDGE: OFF" end
     -- This invalidates all current farm cycles and pending recovery retries.
-    S.running=false;S.token+=1;S.waiting=false
+    S.running=false;S.treasureStandalone=false;S.token+=1;S.waiting=false
     S.sellQueue={}
     if S.completion then S.completion:Disconnect();S.completion=nil end
     farmB.Text="AUTO FARM: OFF"
