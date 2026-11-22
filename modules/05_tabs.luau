@@ -3,15 +3,30 @@
 -- ===== COMPACT 5-TAB INTERFACE =====
 -- The existing farm, Dredge and preset controls are the exact same objects
 -- (and callbacks). Reparenting them keeps every existing function intact.
-      function page()
-    return make("Frame",{
+      function page(scrollable)
+    local class=scrollable and "ScrollingFrame" or "Frame"
+    local props={
         Position=UDim2.fromOffset(0,75),
         Size=UDim2.new(1,0,1,-75),
         BackgroundTransparency=1,
-        Visible=false
-    },Body)
+        Visible=false,
+        ClipsDescendants=true
+    }
+    if scrollable then
+        props.Active=true
+        props.ScrollingEnabled=true
+        props.ScrollingDirection=Enum.ScrollingDirection.Y
+        props.ScrollBarThickness=3
+        props.ScrollBarImageColor3=MUTED
+        props.CanvasPosition=Vector2.zero
+        props.CanvasSize=UDim2.fromOffset(0,570)
+        props.AutomaticCanvasSize=Enum.AutomaticSize.None
+        props.ElasticBehavior=Enum.ElasticBehavior.WhenScrollable
+    end
+    return make(class,props,Body)
 end
-      farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage,packPage=page(),page(),page(),page(),page(),page(),page()
+      farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage,packPage=
+    page(),page(true),page(),page(),page(),page(),page()
       TAB_NAMES={"FARM","DREDGE","ZONE","TREASURE","REFORGE","DEBUG","PACK"}
       TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage,packPage}
       tabButtons={}
