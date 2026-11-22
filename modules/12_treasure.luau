@@ -1,13 +1,13 @@
 -- Galaxis module: 12_treasure.luau
 -- Treasure automation. Runs only after a completed pan cycle.
-for _,k in ipairs({"treasureTitle","treasureStatus","treasureToggle","treasureScanButton","treasureOutput"}) do
+for _,k in ipairs({"treasureTitle","treasureStatus","treasureToggle","treasureMinLabel","treasureMinInput","treasureScanButton","treasureOutput"}) do
     if S[k] then pcall(function() S[k]:Destroy() end) end
 end
 S.treasureEnabled=S.treasureEnabled==true
 S.treasureBusy=false
 S.treasureRequested=false
 S.treasureStandalone=false
-S.treasureMinMaps=1
+S.treasureMinMaps=math.clamp(math.floor(tonumber(E.GalaxisTreasureMinMaps) or 3),1,100)
 S.treasureNextTryAt=0
 S.treasureCompleted=S.treasureCompleted or {}
 S.treasureAttempted=S.treasureAttempted or {}
@@ -15,14 +15,22 @@ S.treasureLastError=nil
 
 S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("OFF | Digs and pans to earn maps, then collects them.",14,39,312,38,10,MUTED)
+S.treasureStatus=label("OFF | Farms until your map threshold, then collects all maps.",14,39,312,38,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
 S.treasureToggle=button("AUTO DIG MAPS: OFF",14,82,312,36,treasurePage)
-S.treasureScanButton=button("SCAN TREASURE MAPS",14,126,312,32,treasurePage)
+S.treasureMinLabel=label("MAPS BEFORE TREASURE RUN",14,130,228,31,10,MUTED)
+S.treasureMinInput=make("TextBox",{
+    Position=UDim2.fromOffset(247,128),Size=UDim2.fromOffset(79,33),
+    BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
+    Font=Enum.Font.GothamBold,TextSize=13,
+    Text=tostring(S.treasureMinMaps),ClearTextOnFocus=false,
+    TextXAlignment=Enum.TextXAlignment.Center
+},treasurePage)
+S.treasureScanButton=button("SCAN TREASURE MAPS",14,171,312,32,treasurePage)
 S.treasureScanButton.BackgroundColor3=PANEL
-S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,166),
-    Size=UDim2.new(1,-28,1,-180),BackgroundColor3=PANEL,BorderSizePixel=0,
+S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,211),
+    Size=UDim2.new(1,-28,1,-225),BackgroundColor3=PANEL,BorderSizePixel=0,
     TextColor3=FG,PlaceholderColor3=MUTED,PlaceholderText="Map inventory and route status.",
     Text="",ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,
     TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
@@ -606,6 +614,7 @@ local function tScan()
     end
     lines[#lines+1]=""
     lines[#lines+1]="Auto Dig: "..tostring(S.treasureEnabled)
+    lines[#lines+1]="Run threshold: "..tostring(S.treasureMinMaps).." maps"
     lines[#lines+1]="Dig position saved: "..tostring(S.dig~=nil)
     lines[#lines+1]="Water/pan position saved: "..tostring(S.water~=nil)
     lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
@@ -634,6 +643,22 @@ bind(S.treasureToggle.MouseButton1Click,function()
         tStatus(S.treasureBusy and "OFF | Stopping at next safe movement check." or "OFF")
     end
     tRefresh()
+end)
+bind(S.treasureMinInput.FocusLost,function()
+    local raw=S.treasureMinInput.Text
+    local value=tonumber(raw)
+    if value and value==value then
+        S.treasureMinMaps=math.clamp(math.floor(value),1,100)
+        E.GalaxisTreasureMinMaps=S.treasureMinMaps
+    end
+    S.treasureMinInput.Text=tostring(S.treasureMinMaps)
+    local n=#tEligibleMaps()
+    if S.treasureEnabled and not S.treasureBusy then
+        S.treasureRequested=S.running and n>=S.treasureMinMaps
+        tStatus(n>=S.treasureMinMaps
+            and ("Threshold reached ("..n.."/"..S.treasureMinMaps..") | treasure next")
+            or ("Farming until "..S.treasureMinMaps.." maps ("..n.." collected)"))
+    end
 end)
 bind(S.treasureScanButton.MouseButton1Click,tScan)
 tRefresh()
