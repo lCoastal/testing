@@ -43,7 +43,7 @@ local function tMaps()
                 local pos,region=tool:GetAttribute("Location"),tool:GetAttribute("Region")
                 local guid=tool:GetAttribute("GUID")
                 if typeof(pos)=="Vector3" and type(region)=="string" and region~="" then
-                    out[#out+1]={tool=tool,pos=pos,region=region,guid=tostring(guid or tool:GetDebugId())}
+                    out[#out+1]={tool=tool,pos=pos,region=region,guid=tostring(guid or tool)}
                 end
             end
         end
@@ -59,6 +59,33 @@ local function tEligibleMaps()
     end
     return list
 end
+local function tEquippedPan(id)
+    local held=panTool()
+    if held then return held end
+    local candidate=S.panInBackpack()
+    if not candidate then return nil,"No pan found in inventory" end
+    if requirePanEquipped(candidate,id) then
+        return panTool() or candidate
+    end
+    -- The game also stores pans in BackpackTwo. The normal Humanoid equip
+    -- path cannot equip directly from that container.
+    local remotes=RS:FindFirstChild("Remotes")
+    local custom=remotes and remotes:FindFirstChild("CustomBackpack")
+    local equipRemote=custom and custom:FindFirstChild("EquipRemote")
+    if not equipRemote or not equipRemote:IsA("RemoteEvent") then
+        return nil,"No compatible custom backpack equip remote"
+    end
+    local sent=pcall(function() equipRemote:FireServer(candidate.tool) end)
+    if not sent then return nil,"Custom backpack equip request failed" end
+    local deadline=os.clock()+3
+    while valid(id) and os.clock()<deadline do
+        held=panTool()
+        if held then return held end
+        task.wait(.1)
+    end
+    return nil,"Pan equip did not replicate within 3 seconds"
+end
+
 local function tChestCount()
     local n=0
     for _,bag in ipairs(tContainers()) do
@@ -140,9 +167,10 @@ local function tRun(id)
         if not walked or not stableAt(target,id,12,.45,3) then
             ok,err=false,"Could not run to map destination: "..tostring(walkWhy);break
         end
-        local pan=panTool() or S.panInBackpack()
-        if not pan or not requirePanEquipped(pan,id) then
-            ok,err=false,"Could not equip pan at treasure location";break
+        local pan,equipWhy=tEquippedPan(id)
+        if not pan then
+            ok,err=false,"Could not equip pan at treasure location: "..tostring(equipWhy)
+            break
         end
         local before=tChestCount()
         -- Only mark attempted when the dig is actually about to be sent.
