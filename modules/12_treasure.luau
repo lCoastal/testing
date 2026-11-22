@@ -15,7 +15,7 @@ S.treasureLastError=nil
 
 S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("OFF | Auto-digs every map; fast travel when it saves distance.",14,39,312,38,10,MUTED)
+S.treasureStatus=label("OFF | Digs and pans to earn maps, then collects them.",14,39,312,38,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
 S.treasureToggle=button("AUTO DIG MAPS: OFF",14,82,312,36,treasurePage)
@@ -493,30 +493,103 @@ S.treasureCycle=function(id,r)
     end
 end
 
--- Standalone treasure runner. Auto Farm and Dredge do NOT need to be on.
--- If a farm worker is active, it owns the cycle and calls S.treasureCycle
--- between complete pan cycles. Do not move concurrently with it.
+-- Independent loop: farm at the saved dig/water positions until a
+-- Treasure Map is earned, collect all available maps, then farm again.
+-- If Auto Farm or Dredge is already running, their EXISTING worker farms
+-- and this loop only requests treasure routing at pan-cycle boundaries.
+local function tFarmOneCycle(id)
+    if not S.dig or not S.water then
+        return false,"Set both DIG and WATER positions on the FARM tab"
+    end
+    local pan,why=tEquippedPan(id)
+    if not pan then return false,"Cannot equip farming pan: "..tostring(why) end
+    local cap=S.capacity()
+    if not cap or cap<=0 then return false,"Pan capacity unavailable" end
+
+    if S.completion then
+        S.completion:Disconnect()
+        S.completion=nil
+    end
+    if pan.done and pan.done:IsA("RemoteEvent") then
+        S.completion=pan.done.OnClientEvent:Connect(function()
+            if valid(id) and S.waiting then S.completed=true end
+        end)
+    end
+    local oldSell=S.sell
+    -- Prevent SellAll from disposing of a map before this loop sees it.
+    S.sell=false
+    local ok,whyCycle=pcall(farming,id,pan,cap)
+    S.sell=oldSell
+    if S.completion then
+        S.completion:Disconnect()
+        S.completion=nil
+    end
+    S.waiting=false
+    if not ok then return false,tostring(whyCycle) end
+    if whyCycle~="TREASURE_FARM_CYCLE_DONE" then
+        return false,tostring(whyCycle or "Incomplete farm cycle")
+    end
+    return true
+end
+
+local function tStandaloneLoop(id)
+    local errors=0
+    while valid(id) and S.treasureEnabled and not S.running do
+        if #tEligibleMaps()>=S.treasureMinMaps then
+            if os.clock()>=(S.treasureNextTryAt or 0) then
+                S.treasureCycle(id,nil)
+            else
+                task.wait(.4)
+            end
+        else
+            tStatus("Treasure auto-farming | digging and panning to earn maps")
+            local ok,reason=tFarmOneCycle(id)
+            if not ok then
+                errors+=1
+                tStatus("Treasure farm: "..tostring(reason))
+                -- Don't spam failed Collect/Pan requests or the same destination.
+                if errors>=5 then
+                    S.treasureNextTryAt=os.clock()+10
+                    task.wait(2)
+                    errors=0
+                else
+                    task.wait(1)
+                end
+            else
+                errors=0
+                -- Give earned map items a moment to replicate.
+                task.wait(.4)
+            end
+        end
+    end
+end
+
 task.spawn(function()
     while S.alive do
-        task.wait(1.0)
-        if S.treasureEnabled and not S.treasureBusy
-            and os.clock()>=(S.treasureNextTryAt or 0) then
-            local count=#tEligibleMaps()
-            if count>=S.treasureMinMaps then
-                if S.running then
+        task.wait(.6)
+        if S.treasureEnabled then
+            if S.running then
+                if #tEligibleMaps()>=S.treasureMinMaps then
                     S.treasureRequested=true
-                    -- An active farming worker will yield at a safe boundary.
-                elseif not S.treasureStandalone then
+                end
+            elseif not S.treasureStandalone then
+                if S.dig and S.water then
                     S.treasureStandalone=true
                     S.token+=1
                     local id=S.token
-                    local ok,err=pcall(S.treasureCycle,id,nil)
-                    if not ok then
+                    local ok,err=pcall(tStandaloneLoop,id)
+                    if not ok and S.alive then
                         S.treasureLastError=tostring(err)
-                        S.treasureNextTryAt=os.clock()+20
-                        tStatus("Standalone treasure error: "..S.treasureLastError)
+                        tStatus("Treasure farm error: "..S.treasureLastError)
                     end
+                    if S.completion then
+                        S.completion:Disconnect()
+                        S.completion=nil
+                    end
+                    S.waiting=false
                     S.treasureStandalone=false
+                else
+                    tStatus("AUTO DIG ON | Set DIG and WATER in the FARM tab first")
                 end
             end
         end
@@ -533,6 +606,8 @@ local function tScan()
     end
     lines[#lines+1]=""
     lines[#lines+1]="Auto Dig: "..tostring(S.treasureEnabled)
+    lines[#lines+1]="Dig position saved: "..tostring(S.dig~=nil)
+    lines[#lines+1]="Water/pan position saved: "..tostring(S.water~=nil)
     lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
     tStatus(table.concat(lines,"\n"))
 end
@@ -545,10 +620,15 @@ bind(S.treasureToggle.MouseButton1Click,function()
     if S.treasureEnabled then
         local n=#tEligibleMaps()
         S.treasureRequested=S.running and n>=S.treasureMinMaps
-        tStatus(n>=S.treasureMinMaps
-            and (S.running and "AUTO DIG ON | Waiting for safe pan-cycle boundary."
-                or "AUTO DIG ON | Starting treasure route independently.")
-            or string.format("AUTO DIG ON | Waiting for maps (%d/%d)",n,S.treasureMinMaps))
+        if not S.running and (not S.dig or not S.water) then
+            tStatus("AUTO DIG ON | Set DIG and WATER on FARM tab first")
+        elseif n>=S.treasureMinMaps then
+            tStatus(S.running
+                and "AUTO DIG ON | Treasure after current pan cycle"
+                or "AUTO DIG ON | Collecting existing maps")
+        else
+            tStatus("AUTO DIG ON | Farming maps at saved DIG and WATER positions")
+        end
     else
         S.treasureRequested=false
         tStatus(S.treasureBusy and "OFF | Stopping at next safe movement check." or "OFF")
