@@ -93,11 +93,12 @@ end
 -- Treasure collection is coordinate-driven: the map's Location is the
 -- destination. Do not resolve warp stones or invoke zone-routing helpers.
 local function tRestore(cp,id)
-    if not cp.dig then return false,"Original farming dig position was not saved" end
-    tStatus("Running back to the saved farming position")
-    local ok,why=walkRoute(cp.dig,id,10000)
+    local home=cp.returnCF
+    if not home then return false,"Original return position was not saved" end
+    tStatus("Running back to the original dig/start position")
+    local ok,why=walkRoute(home,id,10000)
     if not ok then return false,"Could not run back to saved dig position: "..tostring(why) end
-    if not stableAt(cp.dig,id,12,.45,3) then
+    if not stableAt(home,id,12,.45,3) then
         return false,"Could not settle at saved farming position"
     end
     S.dig,S.water=cp.dig,cp.water
@@ -112,12 +113,13 @@ local function tRun(id)
     S.treasureBusy=true
     local rr=root()
     local cp={
-        dig=S.dig or (rr and rr.CFrame),
+        dig=S.dig,returnCF=S.dig or (rr and rr.CFrame),
         water=S.water,
         zone=S.dredge and S.dredgeAt or S.activeZone,
         dredgeAt=S.dredgeAt
     }
     local oldDredge=S.dredge==true
+    S.treasureWasDredge=oldDredge
     local oldSell=S.sell
     -- Suspend the Dredge planner while the treasure route owns movement.
     -- Resume it only after one complete farm cycle at the restored checkpoint.
@@ -175,6 +177,7 @@ local function tRun(id)
         S.treasureNextTryAt=os.clock()+2
     end
     S.treasureBusy=false
+    S.treasureWasDredge=nil
     if ok then
         S.diagEvent("TREASURE_ROUTE_COMPLETE","maps="..#ordered)
         tStatus("Treasure route complete. Returned to saved farming location.")
@@ -205,6 +208,7 @@ S.treasureCycle=function(id,r)
         S.treasureLastError=tostring(err)
         S.treasureNextTryAt=os.clock()+20
         S.dredge=S.treasureWasDredge and S.running or false
+        S.treasureWasDredge=nil
         tStatus("Treasure error: "..S.treasureLastError)
     end
 end
