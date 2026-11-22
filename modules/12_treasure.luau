@@ -554,12 +554,20 @@ local function tStandaloneLoop(id)
             local ok,reason=tFarmOneCycle(id)
             if not ok then
                 errors+=1
-                tStatus("Treasure farm: "..tostring(reason))
-                -- Don't spam failed Collect/Pan requests or the same destination.
+                tStatus("Treasure farm paused ("..errors.."/5): "..tostring(reason))
+                -- Repeated missing Fill usually means an invalid dig spot or
+                -- a rejected server position. Stop teleport loops and leave
+                -- the actionable error visible until the user resets AUTO DIG.
                 if errors>=5 then
-                    S.treasureNextTryAt=os.clock()+10
-                    task.wait(2)
-                    errors=0
+                    S.treasureFarmBlocked=tostring(reason)
+                    S.treasureEnabled=false
+                    S.treasureRequested=false
+                    if S.treasureToggle then
+                        S.treasureToggle.Text="AUTO DIG MAPS: OFF"
+                        S.treasureToggle.BackgroundColor3=PANEL
+                    end
+                    tStatus("Treasure stopped after 5 failures: "..S.treasureFarmBlocked)
+                    break
                 else
                     task.wait(1)
                 end
