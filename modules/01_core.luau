@@ -372,7 +372,7 @@ function S.timing(key)
     return (S.turbo and TURBO[key]) or CFG[key]
 end
 
-      function valid(id) return S.alive and S.running and S.token==id end
+      function valid(id) return S.alive and S.token==id and (S.running or S.treasureStandalone==true) end
       function bind(sig,fn) local c=sig:Connect(fn);S.links[#S.links+1]=c;return c end
       function root() local c=P.Character;return c and c:FindFirstChild("HumanoidRootPart") end
       function panTool()
