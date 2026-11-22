@@ -243,6 +243,11 @@ end
         S.diagEvent("CYCLE_DONE",string.format(
             "cycle=%d total=%.3fs dig=%.3fs water=%.3fs pan=%.3fs shake=%.3fs",
             S.cycles,total,digTime,waterTime,panTime,os.clock()-shakeStart))
+        -- Treasure-only mode runs a SINGLE complete pan, then hands control
+        -- back to the independent map-hunt loop to inspect newly earned maps.
+        if S.treasureStandalone and not S.running then
+            return "TREASURE_FARM_CYCLE_DONE"
+        end
         autoSell(id,S.cycles)
         -- Run treasure routing only after the full pan cycle has completed.
         if S.treasureCycle then
