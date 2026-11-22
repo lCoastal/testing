@@ -6,16 +6,19 @@ end
 S.treasureEnabled=S.treasureEnabled==true
 S.treasureBusy=false
 S.treasureRequested=false
+S.treasureStandalone=false
+S.treasureMinMaps=2
+S.treasureNextTryAt=0
 S.treasureCompleted=S.treasureCompleted or {}
 S.treasureAttempted=S.treasureAttempted or {}
 S.treasureLastError=nil
 
 S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("OFF | Starts after a completed pan when 2+ maps are held.",14,39,312,38,10,MUTED)
+S.treasureStatus=label("OFF | Independent auto-dig; starts at 2 treasure maps.",14,39,312,38,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
-S.treasureToggle=button("AUTO TREASURE: OFF",14,82,312,36,treasurePage)
+S.treasureToggle=button("AUTO DIG MAPS: OFF",14,82,312,36,treasurePage)
 S.treasureScanButton=button("SCAN TREASURE MAPS",14,126,312,32,treasurePage)
 S.treasureScanButton.BackgroundColor3=PANEL
 S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,166),
@@ -46,6 +49,15 @@ local function tMaps()
         end
     end
     return out
+end
+local function tEligibleMaps()
+    local list={}
+    for _,m in ipairs(tMaps()) do
+        if not S.treasureCompleted[m.guid] and not S.treasureAttempted[m.guid] then
+            list[#list+1]=m
+        end
+    end
+    return list
 end
 local function tChestCount()
     local n=0
@@ -95,10 +107,16 @@ end
 
 local function tRun(id)
     if S.treasureBusy or not S.treasureEnabled or not valid(id) then return end
-    local list=tMaps()
-    if #list<2 then return end
+    local list=tEligibleMaps()
+    if #list<S.treasureMinMaps then return end
     S.treasureBusy=true
-    local cp={dig=S.dig,water=S.water,zone=S.dredge and S.dredgeAt or S.activeZone,dredgeAt=S.dredgeAt}
+    local rr=root()
+    local cp={
+        dig=S.dig or (rr and rr.CFrame),
+        water=S.water,
+        zone=S.dredge and S.dredgeAt or S.activeZone,
+        dredgeAt=S.dredgeAt
+    }
     local oldDredge=S.dredge==true
     local oldSell=S.sell
     -- Suspend the Dredge planner while the treasure route owns movement.
@@ -113,8 +131,7 @@ local function tRun(id)
         if not valid(id) or not S.treasureEnabled then ok,err=false,"Stopped by user";break end
         if not m.tool.Parent or S.treasureCompleted[m.guid] or S.treasureAttempted[m.guid] then continue end
         -- The map's exact Location is the only destination; no zone/stone routing.
-        S.treasureAttempted[m.guid]=true
-        tStatus(string.format("Map %d/%d | running directly to map coordinates in %s",i,#ordered,m.region))
+        tStatus(string.format("Map %d/%d | running to exact coordinates in %s",i,#ordered,m.region))
         local target=CFrame.new(m.pos)
         -- Map destinations are approached on foot as well; no CFrame move/teleport.
         local walked,walkWhy=walkRoute(target,id,10000)
@@ -126,6 +143,8 @@ local function tRun(id)
             ok,err=false,"Could not equip pan at treasure location";break
         end
         local before=tChestCount()
+        -- Only mark attempted when the dig is actually about to be sent.
+        S.treasureAttempted[m.guid]=true
         S.diagEvent("TREASURE_DIG_ONCE",m.region.." | "..tostring(m.pos))
         local sent,response,why=invoke(pan.dig,id,1)
         if not sent then ok,err=false,"Dig request failed: "..tostring(why);break end
@@ -147,12 +166,14 @@ local function tRun(id)
     local returned,why=tRestore(cp,id)
     if not returned then ok,err=false,(err and err.."; " or "").."RETURN FAILED: "..tostring(why) end
     S.sell=oldSell
-    if ok and returned and oldDredge then
-        S.treasureResumeDredgeAfterCycle=(S.cycles or 0)+1
+    -- Restore the controller exactly as it was before the route.
+    -- Never turn Auto Farm or Auto Dredge on if they were originally off.
+    S.dredge=oldDredge and S.running and returned and true or false
+    if not ok then
+        S.treasureNextTryAt=os.clock()+20
     else
-        S.treasureResumeDredgeAfterCycle=nil
+        S.treasureNextTryAt=os.clock()+2
     end
-    S.dredge=false
     S.treasureBusy=false
     if ok then
         S.diagEvent("TREASURE_ROUTE_COMPLETE","maps="..#ordered)
@@ -164,13 +185,17 @@ local function tRun(id)
     end
 end
 
--- Hook called by 09_farming after a complete dig/pan/shake cycle.
+-- One entry point works for the active farm worker and independent travel.
 S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
-    local n=#tMaps()
-    if n<2 then
+    local n=#tEligibleMaps()
+    if n<S.treasureMinMaps then
         S.treasureRequested=false
-        tStatus("AUTO ON | Waiting for maps ("..n.."/2)")
+        tStatus(string.format("AUTO DIG ON | Waiting for maps (%d/%d)",n,S.treasureMinMaps))
+        return
+    end
+    if os.clock()<(S.treasureNextTryAt or 0) then
+        S.treasureRequested=false
         return
     end
     S.treasureRequested=false
@@ -178,45 +203,73 @@ S.treasureCycle=function(id,r)
     if not ok then
         S.treasureBusy=false
         S.treasureLastError=tostring(err)
+        S.treasureNextTryAt=os.clock()+20
+        S.dredge=S.treasureWasDredge and S.running or false
         tStatus("Treasure error: "..S.treasureLastError)
-        S.diagEvent("TREASURE_RUNTIME_ERROR",S.treasureLastError)
     end
 end
+
+-- Standalone treasure runner. Auto Farm and Dredge do NOT need to be on.
+-- If a farm worker is active, it owns the cycle and calls S.treasureCycle
+-- between complete pan cycles. Do not move concurrently with it.
+task.spawn(function()
+    while S.alive do
+        task.wait(1.0)
+        if S.treasureEnabled and not S.treasureBusy
+            and os.clock()>=(S.treasureNextTryAt or 0) then
+            local count=#tEligibleMaps()
+            if count>=S.treasureMinMaps then
+                if S.running then
+                    S.treasureRequested=true
+                    -- An active farming worker will yield at a safe boundary.
+                elseif not S.treasureStandalone then
+                    S.treasureStandalone=true
+                    S.token+=1
+                    local id=S.token
+                    local ok,err=pcall(S.treasureCycle,id,nil)
+                    if not ok then
+                        S.treasureLastError=tostring(err)
+                        S.treasureNextTryAt=os.clock()+20
+                        tStatus("Standalone treasure error: "..S.treasureLastError)
+                    end
+                    S.treasureStandalone=false
+                end
+            end
+        end
+    end
+end)
+
 local function tScan()
     local list=tMaps()
-    local lines={"GALAXIS TREASURE MAPS","Found: "..#list,""}
+    local available=tEligibleMaps()
+    local lines={"GALAXIS TREASURE MAPS","Maps: "..#list.." | eligible: "..#available,""}
     for i,m in ipairs(list) do
         lines[#lines+1]=string.format("%d. %s | %.1f, %.1f, %.1f | %s",
             i,m.region,m.pos.X,m.pos.Y,m.pos.Z,m.guid)
     end
     lines[#lines+1]=""
-    lines[#lines+1]="Auto Treasure: "..tostring(S.treasureEnabled)
+    lines[#lines+1]="Auto Dig: "..tostring(S.treasureEnabled)
     lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
     tStatus(table.concat(lines,"\n"))
 end
 local function tRefresh()
-    S.treasureToggle.Text=S.treasureEnabled and "AUTO TREASURE: ON" or "AUTO TREASURE: OFF"
+    S.treasureToggle.Text=S.treasureEnabled and "AUTO DIG MAPS: ON" or "AUTO DIG MAPS: OFF"
     S.treasureToggle.BackgroundColor3=S.treasureEnabled and Color3.fromRGB(49,83,62) or PANEL
 end
 bind(S.treasureToggle.MouseButton1Click,function()
     S.treasureEnabled=not S.treasureEnabled
     if S.treasureEnabled then
-        local n=#tMaps()
-        if S.running then
-            S.treasureRequested=true
-            tStatus(n>=2
-                and "Treasure requested | Moving to maps after the current safe action."
-                or ("AUTO ON | Waiting for maps ("..n.."/2)"))
-        else
-            S.treasureRequested=false
-            tStatus("AUTO ON | Start Auto Farm/Dredge to travel to your maps.")
-        end
+        local n=#tEligibleMaps()
+        S.treasureRequested=S.running and n>=S.treasureMinMaps
+        tStatus(n>=S.treasureMinMaps
+            and (S.running and "AUTO DIG ON | Waiting for safe pan-cycle boundary."
+                or "AUTO DIG ON | Starting treasure route independently.")
+            or string.format("AUTO DIG ON | Waiting for maps (%d/%d)",n,S.treasureMinMaps))
     else
         S.treasureRequested=false
-        tStatus(S.treasureBusy and "OFF | Stopping after current safe action." or "OFF")
+        tStatus(S.treasureBusy and "OFF | Stopping at next safe movement check." or "OFF")
     end
     tRefresh()
-    S.diagEvent("TREASURE_TOGGLE",tostring(S.treasureEnabled))
 end)
 bind(S.treasureScanButton.MouseButton1Click,tScan)
 tRefresh()
