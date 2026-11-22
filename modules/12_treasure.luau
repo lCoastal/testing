@@ -317,7 +317,7 @@ local function tRestore(cp,id)
     -- Restore the mining settings even if movement failed. This ensures
     -- Dredge never inherits a treasure-map coordinate as its DIG/WATER.
     S.dig,S.water=cp.dig,cp.water
-    S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
+    S.activeZone,S.dredgeAt=cp.activeZone,cp.dredgeAt
     if not ok then return false,"Could not return: "..tostring(why) end
     return true
 end
@@ -337,7 +337,7 @@ local function tRun(id)
         returnCF=oldDredge and (rr and rr.CFrame)
             or (S.dig or (rr and rr.CFrame)),
         water=S.water,
-        zone=oldDredge and S.dredgeAt or S.activeZone,
+        activeZone=S.activeZone,
         dredgeAt=S.dredgeAt,
         riskZone=S.dredgeRiskZone
     }
