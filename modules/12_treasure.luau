@@ -7,7 +7,7 @@ S.treasureEnabled=S.treasureEnabled==true
 S.treasureBusy=false
 S.treasureRequested=false
 S.treasureStandalone=false
-S.treasureMinMaps=2
+S.treasureMinMaps=1
 S.treasureNextTryAt=0
 S.treasureCompleted=S.treasureCompleted or {}
 S.treasureAttempted=S.treasureAttempted or {}
@@ -15,7 +15,7 @@ S.treasureLastError=nil
 
 S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
 relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("OFF | Independent auto-dig; starts at 2 treasure maps.",14,39,312,38,10,MUTED)
+S.treasureStatus=label("OFF | Auto-digs every map; fast travel when it saves distance.",14,39,312,38,10,MUTED)
 relocate(S.treasureStatus,treasurePage,14,39)
 S.treasureStatus.TextWrapped=true
 S.treasureToggle=button("AUTO DIG MAPS: OFF",14,82,312,36,treasurePage)
@@ -102,32 +102,114 @@ local function tStatus(s)
     if S.treasureStatus then S.treasureStatus.Text=s end
     if S.treasureOutput then S.treasureOutput.Text=s end
 end
-local function tSort(list,origin)
-    local left,ordered=table.clone(list),{}
-    local at=origin
-    while #left>0 do
-        local best,dist=1,math.huge
-        for i,m in ipairs(left) do
-            local d=(at-m.pos).Magnitude
-            if d<dist then best,dist=i,d end
+-- Warp decisions use actual waypoint world positions, never a guessed
+-- map-region-to-warp mapping. Do not use Dredge's zone-route planner here.
+local WARP_MIN_SAVING=120
+
+local function tWaypointPairs()
+    local out={}
+    local folder=S.waypointFolder()
+    if not folder then return out end
+    for _,name in ipairs(WAYPOINT_NAMES) do
+        local obj=folder:FindFirstChild(name)
+        local cf=obj and S.getWaypointCF(obj)
+        if obj and cf then
+            out[#out+1]={name=name,obj=obj,cf=cf}
         end
-        local m=table.remove(left,best)
-        ordered[#ordered+1]=m
-        at=m.pos
     end
-    return ordered
+    return out
 end
--- Treasure collection is coordinate-driven: the map's Location is the
--- destination. Do not resolve warp stones or invoke zone-routing helpers.
+
+-- Estimated WALKING distance of direct travel versus walking to a real
+-- stone, warping, and walking from a destination stone to the actual map.
+-- Require a meaningful distance saving to avoid needless warp spam.
+local function tWarpChoice(origin,destination)
+    local direct=(destination-origin).Magnitude
+    local stones=tWaypointPairs()
+    local best=nil
+    local bestDistance=direct
+    for _,from in ipairs(stones) do
+        local approach=(from.cf.Position-origin).Magnitude
+        for _,to in ipairs(stones) do
+            if from.obj~=to.obj then
+                local lastLeg=(destination-to.cf.Position).Magnitude
+                local combined=approach+lastLeg
+                if direct-combined>=WARP_MIN_SAVING and combined<bestDistance then
+                    bestDistance=combined
+                    best={from=from,to=to,saved=direct-combined}
+                end
+            end
+        end
+    end
+    return best,bestDistance
+end
+
+local function tEstimatedTravel(a,b)
+    local _,distance=tWarpChoice(a,b)
+    return distance
+end
+
+local function tPickNext(list,origin)
+    local bestIndex,bestCost=nil,math.huge
+    for i,m in ipairs(list) do
+        local cost=tEstimatedTravel(origin,m.pos)
+        if cost<bestCost then
+            bestIndex,bestCost=i,cost
+        end
+    end
+    return bestIndex
+end
+
+local function tTravel(target,id,description)
+    local r=root()
+    if not r then return false,"Character is missing" end
+    local choice=tWarpChoice(r.Position,target.Position)
+    if choice then
+        local from,to=choice.from,choice.to
+        tStatus(string.format("%s | Running to %s stone (warp saves ~%.0f studs)",
+            description,from.name,choice.saved))
+        local ok,why=walkRoute(from.cf,id,10000,true)
+        if not ok then
+            -- If the departure stone cannot be reached, do not jump to a
+            -- different zone; try direct walking to the map instead.
+            tStatus("Stone approach failed; walking directly to "..description)
+        else
+            r=root()
+            if not r then return false,"Character lost after approaching warp" end
+            if (r.Position-from.cf.Position).Magnitude<=55 then
+                local rem=RS:FindFirstChild("Remotes")
+                local misc=rem and rem:FindFirstChild("Misc")
+                local travel=misc and misc:FindFirstChild("FastTravel")
+                if travel and travel:IsA("RemoteEvent") then
+                    tStatus("Fast Travel: "..from.name.." -> "..to.name)
+                    local sent=pcall(function() travel:FireServer(from.obj,to.obj) end)
+                    if sent then
+                        -- Server must confirm the actual destination. Never
+                        -- assume the fast-travel remote succeeded.
+                        local arrived=stableAt(to.cf,id,85,1.1,8)
+                        if not arrived and not valid(id) then
+                            return false,"Treasure run interrupted after warp"
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    tStatus("Running to "..description)
+    local walked,why=walkRoute(target,id,10000)
+    if not walked then return false,"Walking failed: "..tostring(why) end
+    if not stableAt(target,id,12,.45,3) then
+        return false,"Destination did not settle"
+    end
+    return true
+end
+
 local function tRestore(cp,id)
     local home=cp.returnCF
     if not home then return false,"Original return position was not saved" end
-    tStatus("Running back to the original dig/start position")
-    local ok,why=walkRoute(home,id,10000)
-    if not ok then return false,"Could not run back to saved dig position: "..tostring(why) end
-    if not stableAt(home,id,12,.45,3) then
-        return false,"Could not settle at saved farming position"
-    end
+    local ok,why=tTravel(home,id,"original dig/start position")
+    if not ok then return false,"Could not return: "..tostring(why) end
     S.dig,S.water=cp.dig,cp.water
     S.activeZone,S.dredgeAt=cp.zone,cp.dredgeAt
     return true
@@ -151,46 +233,82 @@ local function tRun(id)
     -- Suspend the Dredge planner while the treasure route owns movement.
     -- Resume it only after one complete farm cycle at the restored checkpoint.
     S.dredge=false
-    local ordered=tSort(list,root() and root().Position or Vector3.zero)
     local ok,err=true,nil
+    local completedThisRun,failedThisRun=0,0
+    local firstFailure=nil
     S.sell=false
-    S.diagEvent("TREASURE_ROUTE_START","maps="..#ordered)
-
-    for i,m in ipairs(ordered) do
-        if not valid(id) or not S.treasureEnabled then ok,err=false,"Stopped by user";break end
-        if not m.tool.Parent or S.treasureCompleted[m.guid] or S.treasureAttempted[m.guid] then continue end
-        -- The map's exact Location is the only destination; no zone/stone routing.
-        tStatus(string.format("Map %d/%d | running to exact coordinates in %s",i,#ordered,m.region))
-        local target=CFrame.new(m.pos)
-        -- Map destinations are approached on foot as well; no CFrame move/teleport.
-        local walked,walkWhy=walkRoute(target,id,10000)
-        if not walked or not stableAt(target,id,12,.45,3) then
-            ok,err=false,"Could not run to map destination: "..tostring(walkWhy);break
+    local initialCount=#list
+    local steps=0
+    -- Re-scan after each dig: includes every new map obtained during this
+    -- trip, without needing to toggle Auto Dig or start another farm cycle.
+    while valid(id) and S.treasureEnabled do
+        local remaining=tEligibleMaps()
+        if #remaining==0 then break end
+        steps+=1
+        if steps>250 then
+            ok,err=false,"Safety stop: 250 map destinations in a single trip"
+            break
         end
+
+        local r=root()
+        if not r then ok,err=false,"Character missing during treasure route";break end
+        local nextIndex=tPickNext(remaining,r.Position)
+        if not nextIndex then break end
+        local m=remaining[nextIndex]
+        if not m.tool or not m.tool.Parent then
+            -- Map was removed by the game; rescan instead of failing.
+            task.wait(.1)
+            continue
+        end
+        tStatus(string.format("Map %d | %s | target %.1f, %.1f, %.1f",
+            steps,m.region,m.pos.X,m.pos.Y,m.pos.Z))
+        local reached,travelWhy=tTravel(CFrame.new(m.pos),id,"map in "..m.region)
+        if not reached then
+            -- Skip a blocked map and continue collecting other maps.
+            S.treasureAttempted[m.guid]=true
+            failedThisRun+=1
+            firstFailure=firstFailure or ("Unable to reach "..m.region..": "..tostring(travelWhy))
+            continue
+        end
+
         local pan,equipWhy=tEquippedPan(id)
         if not pan then
-            ok,err=false,"Could not equip pan at treasure location: "..tostring(equipWhy)
+            ok,err=false,"Could not equip pan: "..tostring(equipWhy)
             break
         end
         local before=tChestCount()
-        -- Only mark attempted when the dig is actually about to be sent.
-        S.treasureAttempted[m.guid]=true
-        S.diagEvent("TREASURE_DIG_ONCE",m.region.." | "..tostring(m.pos))
+        S.treasureAttempted[m.guid]=true  -- exactly one dig per map
         local sent,response,why=invoke(pan.dig,id,1)
-        if not sent then ok,err=false,"Dig request failed: "..tostring(why);break end
+        if not sent then
+            failedThisRun+=1
+            firstFailure=firstFailure or ("Dig request failed: "..tostring(why))
+            continue
+        end
         local found=false
         local deadline=os.clock()+15
         while valid(id) and os.clock()<deadline do
             if tChestCount()>before then found=true;break end
             task.wait(.15)
         end
-        if not found then
-            ok,err=false,"Dig sent once; chest not verified. This map will not be dug again automatically."
-            break
+        if found then
+            S.treasureCompleted[m.guid]=true
+            completedThisRun+=1
+            tStatus(string.format("Collected %d chest(s) | %d map(s) left",
+                completedThisRun,#tEligibleMaps()))
+        else
+            failedThisRun+=1
+            firstFailure=firstFailure or
+                "Dig sent once but no chest appeared within 15 seconds"
         end
-        S.treasureCompleted[m.guid]=true
-        S.diagEvent("TREASURE_CHEST_CONFIRMED",m.region.." | "..m.guid)
-        tStatus(string.format("Chest collected %d/%d | %s",i,#ordered,m.region))
+    end
+
+    if not valid(id) or not S.treasureEnabled then
+        ok,err=false,"Stopped by user"
+    end
+    if failedThisRun>0 then
+        ok=false
+        err=string.format("%d map(s) not verified: %s",
+            failedThisRun,tostring(firstFailure))
     end
 
     local returned,why=tRestore(cp,id)
@@ -207,12 +325,12 @@ local function tRun(id)
     S.treasureBusy=false
     S.treasureWasDredge=nil
     if ok then
-        S.diagEvent("TREASURE_ROUTE_COMPLETE","maps="..#ordered)
-        tStatus("Treasure route complete. Returned to saved farming location.")
+        S.diagEvent("TREASURE_ROUTE_COMPLETE","collected="..completedThisRun)
+        tStatus("Treasure done: "..completedThisRun.." chest(s). Returned to farming location.")
     else
         S.treasureLastError=tostring(err)
         S.diagEvent("TREASURE_ROUTE_FAILED",S.treasureLastError)
-        tStatus("Treasure stopped: "..S.treasureLastError)
+        tStatus("Treasure: "..completedThisRun.." collected; "..S.treasureLastError)
     end
 end
 
