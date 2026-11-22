@@ -613,11 +613,17 @@ end
 local function tStandaloneLoop(id)
     local errors=0
     while valid(id) and S.treasureEnabled and not S.running do
-        if #tReadyMaps()>=S.treasureMinMaps then
-            if os.clock()>=(S.treasureNextTryAt or 0) then
+        local owned=#tMaps()
+        local ready=#tReadyMaps()
+        if owned>=S.treasureMinMaps then
+            if ready>=S.treasureMinMaps
+                and os.clock()>=(S.treasureNextTryAt or 0) then
                 S.treasureCycle(id,nil)
             else
-                task.wait(.4)
+                tStatus(string.format(
+                    "Treasure | %d maps held, %d ready; waiting for retry",
+                    owned,ready))
+                task.wait(.6)
             end
         else
             tStatus("Treasure auto-farming | digging and panning to earn maps")
