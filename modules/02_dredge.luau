@@ -343,6 +343,27 @@ end
     return plan
 end
 
+-- Overrides the normal pans/cost optimizer for time-limited, rare quest
+-- objectives. This never overrides zone eligibility, permissions, the
+-- actual hourly gate, or the remaining quest requirements.
+-- Both can only be sourced from their respective timed deposits.
+      function timedRareObjective(wants)
+    local priority={
+        {mineral="Eternium",zone="Timelocked Sanctuary"},
+        {mineral="Dinosaur Skull",zone="Infernal Heart"}
+    }
+    for _,special in ipairs(priority) do
+        if openNow(special.zone) and eligible(special.zone,5) then
+            for _,objective in ipairs(wants) do
+                if objective.m==special.mineral and objective.n>0 then
+                    return objective,special.zone
+                end
+            end
+        end
+    end
+    return nil,nil
+end
+
       function getQuest()
     if type(getsenv)~="function" then return nil end
     local gui=P:FindFirstChild("PlayerGui")
@@ -2029,6 +2050,10 @@ end
     local L=math.max(1,S.dredgeUncappedLuck)
     local need={}
     for _,w in ipairs(wants) do need[w.m]=w.n end
+    local timedPriority,timedPriorityZone=nil,nil
+    if not fallbackMode then
+        timedPriority,timedPriorityZone=timedRareObjective(wants)
+    end
     -- Sticky Dredge zone:
     -- Replanning on 10% progress changes or each Capacity fluctuation
     -- caused costly Volcanic Sands / Volcanic Springs / Sandstone trips.
@@ -2064,8 +2089,38 @@ end
                 "current zone closed or equipment unavailable: "..tostring(zone))
         end
     end
+    if timedPriority and keep then
+        local heldZone=baseDrop(S.dredgeCurrent or "")
+        local hasPriority=false
+        for _,objective in ipairs(S.dredgeGroup or {}) do
+            if objective.m==timedPriority.m then hasPriority=true;break end
+        end
+        if heldZone~=timedPriorityZone or not hasPriority then
+            keep=false
+            S.diagEvent("DREDGE_TIMED_PRIORITY_SWITCH",
+                timedPriority.m.." @ "..timedPriorityZone..
+                " supersedes current "..heldZone)
+        end
+    end
     if not keep then
-        local plan=bestRoute(wants,L,capacityNow)
+        local plan=nil
+        if timedPriority and timedPriorityZone then
+            local per=math.max(1,.6779*math.max(1,capacityNow)^.56474)
+            local stop=groupBest({timedPriority},{timedPriorityZone},L,per)
+            if stop then
+                plan={
+                    stops={stop},
+                    total=stop.pans,
+                    covered=1,
+                    needed=#wants,
+                    timedPriority=timedPriority.m
+                }
+                S.diagEvent("DREDGE_TIMED_PRIORITY",
+                    timedPriority.m.." first in "..timedPriorityZone..
+                    " while its timed gate is open")
+            end
+        end
+        if not plan then plan=bestRoute(wants,L,capacityNow) end
         if (not plan or not plan.stops[1]) and not fallbackMode then
             local fallback=S.getFallbackWants()
             if fallback then
