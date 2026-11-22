@@ -1,6 +1,10 @@
 -- Galaxis module: 11_worker.luau
 -- Loaded by beta.luau into the shared Galaxis environment.
       function startWorker(asDredge)
+    if S.treasureBusy or S.treasureStandalone then
+        show("Treasure route is active; finish or stop it first")
+        return
+    end
     if S.running then return end
     -- AUTO FARM FAST START: saved locations are already loaded when
     -- selected/captured. Do not reload presets or run any zone setup.
