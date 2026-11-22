@@ -160,6 +160,100 @@ local function tPickNext(list,origin)
     return bestIndex
 end
 
+-- Treasure-only movement fallback. Normal Dredge and Farm paths are unchanged.
+-- Use slow, per-frame, ghost-collision movement for steep terrain and
+-- inaccessible walking routes. Always restore collisions on exit.
+local HEIGHT_THRESHOLD=36
+local FLY_SPEED=42
+local FLY_CEILING_SECONDS=180
+
+local function tFlight(target,id,description)
+    local character=P.Character
+    local humanoid=character and character:FindFirstChildOfClass("Humanoid")
+    local startRoot=root()
+    if not character or not startRoot or not humanoid or humanoid.Health<=0 then
+        return false,"Character unavailable for flight"
+    end
+    local collisions={}
+    local function ghost(part)
+        if part:IsA("BasePart") and collisions[part]==nil then
+            collisions[part]=part.CanCollide
+        end
+        if part:IsA("BasePart") then part.CanCollide=false end
+    end
+    for _,part in ipairs(character:GetDescendants()) do ghost(part) end
+    local added=character.DescendantAdded:Connect(function(part)
+        if part:IsA("BasePart") then ghost(part) end
+    end)
+    local originalAutoRotate=humanoid.AutoRotate
+    local originalPlatformStand=humanoid.PlatformStand
+    humanoid.AutoRotate=false
+    humanoid.PlatformStand=true
+    local flightError=nil
+    local reached=false
+    local began=os.clock()
+    tStatus("Slow noclip flight to "..description)
+    local ok,exception=pcall(function()
+        local last=os.clock()
+        while valid(id) and S.treasureEnabled
+            and os.clock()-began<FLY_CEILING_SECONDS do
+            local r=root()
+            if not r or humanoid.Health<=0 then
+                flightError="Character lost during flight"
+                break
+            end
+            local difference=target.Position-r.Position
+            if difference.Magnitude<=4.5 then
+                reached=true
+                break
+            end
+            local now=os.clock()
+            local dt=math.clamp(now-last,1/120,.11)
+            last=now
+            local step=math.min(difference.Magnitude,FLY_SPEED*dt)
+            local nextPos=r.Position+difference.Unit*step
+            r.AssemblyLinearVelocity=Vector3.zero
+            r.AssemblyAngularVelocity=Vector3.zero
+            r.CFrame=CFrame.new(nextPos)*target.Rotation
+            task.wait()
+        end
+    end)
+    added:Disconnect()
+    for part,canCollide in pairs(collisions) do
+        if part.Parent then pcall(function() part.CanCollide=canCollide end) end
+    end
+    if humanoid.Parent then
+        humanoid.AutoRotate=originalAutoRotate
+        humanoid.PlatformStand=originalPlatformStand
+    end
+    local finalRoot=root()
+    if finalRoot then
+        finalRoot.AssemblyLinearVelocity=Vector3.zero
+        finalRoot.AssemblyAngularVelocity=Vector3.zero
+    end
+    if not ok then return false,"Flight runtime error: "..tostring(exception) end
+    if not valid(id) or not S.treasureEnabled then return false,"Flight cancelled" end
+    if not reached then return false,flightError or "Flight timed out / movement corrected" end
+    -- Ensure the server did not rubber-band the avatar before we dig.
+    return stableAt(target,id,9,.35,2.5), "Flight destination not stable"
+end
+
+local function tMove(target,id,description,checkpoint)
+    local r=root()
+    if not r then return false,"Character missing before travel" end
+    local rise=math.abs(r.Position.Y-target.Position.Y)
+    if rise>=HEIGHT_THRESHOLD then
+        return tFlight(target,id,description)
+    end
+    local walked,why=walkRoute(target,id,10000,checkpoint)
+    if walked then return true end
+    if not valid(id) or not S.treasureEnabled then
+        return false,tostring(why)
+    end
+    tStatus("Pathfinding failed ("..tostring(why).."); switching to slow flight")
+    return tFlight(target,id,description)
+end
+
 local function tTravel(target,id,description)
     local r=root()
     if not r then return false,"Character is missing" end
@@ -168,7 +262,7 @@ local function tTravel(target,id,description)
         local from,to=choice.from,choice.to
         tStatus(string.format("%s | Running to %s stone (warp saves ~%.0f studs)",
             description,from.name,choice.saved))
-        local ok,why=walkRoute(from.cf,id,10000,true)
+        local ok,why=tMove(from.cf,id,"departure stone "..from.name,true)
         if not ok then
             -- If the departure stone cannot be reached, do not jump to a
             -- different zone; try direct walking to the map instead.
@@ -197,8 +291,8 @@ local function tTravel(target,id,description)
     end
 
     tStatus("Running to "..description)
-    local walked,why=walkRoute(target,id,10000)
-    if not walked then return false,"Walking failed: "..tostring(why) end
+    local walked,why=tMove(target,id,description,false)
+    if not walked then return false,"Movement failed: "..tostring(why) end
     if not stableAt(target,id,12,.45,3) then
         return false,"Destination did not settle"
     end
@@ -276,18 +370,54 @@ local function tRun(id)
             ok,err=false,"Could not equip pan: "..tostring(equipWhy)
             break
         end
+        -- Use the map itself as a second success signal. The game can
+        -- consume the map before the chest tool finishes replicating.
         local before=tChestCount()
-        S.treasureAttempted[m.guid]=true  -- exactly one dig per map
-        local sent,response,why=invoke(pan.dig,id,1)
-        if not sent then
+        local beforeMap=m.tool.Parent~=nil
+        local sent,response,why=false,nil,nil
+        local wasAccepted=false
+        for attempt=1,3 do
+            if not valid(id) or not S.treasureEnabled then break end
+            local avatar=root()
+            if not avatar or (avatar.Position-m.pos).Magnitude>10 then
+                local settled,settleWhy=tMove(CFrame.new(m.pos),id,"treasure dig location",false)
+                if not settled then
+                    why="Cannot stay at dig location: "..tostring(settleWhy)
+                    break
+                end
+            end
+            local held,equipWhy=tEquippedPan(id)
+            if not held then
+                why="Pan was not equipped: "..tostring(equipWhy)
+                break
+            end
+            tStatus(string.format("Digging %s | request %d/3",m.region,attempt))
+            sent,response,why=invoke(held.dig,id,1)
+            if sent and response~=false then
+                wasAccepted=true
+                break
+            end
+            -- A successful RPC with an explicit 'false' result is safe to
+            -- retry after settling. An uncertain/failed RPC is NOT safe:
+            -- it may have executed server-side and should not be doubled.
+            if not sent then break end
+            if attempt<3 then task.wait(.35) end
+        end
+        if not wasAccepted then
+            S.treasureAttempted[m.guid]=true
             failedThisRun+=1
-            firstFailure=firstFailure or ("Dig request failed: "..tostring(why))
+            firstFailure=firstFailure or
+                ("Treasure dig not accepted: "..tostring(why or response))
             continue
         end
+        -- Do not send another dig for an accepted or uncertain request.
+        S.treasureAttempted[m.guid]=true
         local found=false
-        local deadline=os.clock()+15
+        local consumed=false
+        local deadline=os.clock()+18
         while valid(id) and os.clock()<deadline do
             if tChestCount()>before then found=true;break end
+            if beforeMap and m.tool.Parent==nil then consumed=true end
             task.wait(.15)
         end
         if found then
@@ -298,7 +428,8 @@ local function tRun(id)
         else
             failedThisRun+=1
             firstFailure=firstFailure or
-                "Dig sent once but no chest appeared within 15 seconds"
+                (consumed and "Map consumed but treasure chest not confirmed"
+                    or "Dig accepted, but no treasure chest detected in 18 seconds")
         end
     end
 
