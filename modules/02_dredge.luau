@@ -251,7 +251,21 @@ end
                     if worst<math.huge and (not best or worst<best.pans*(1-1e-9)
                         or (math.abs(worst-best.pans)<=best.pans*1e-9
                         and cap==nil and best.cap~=nil)) then
-                        best={z=z,cap=cap,pans=worst,group=group}
+                        -- Keep every objective obtainable in this deposit,
+                        -- but order the assigned targets by rarity (lowest
+                        -- fitted drop probability first). This makes the
+                        -- rarest shared-zone objective the first priority.
+                        local priorityGroup={}
+                        for _,q in ipairs(group) do
+                            priorityGroup[#priorityGroup+1]=q
+                        end
+                        table.sort(priorityGroup,function(a,b)
+                            local pa=shares[a.m] or 0
+                            local pb=shares[b.m] or 0
+                            if math.abs(pa-pb)>1e-15 then return pa<pb end
+                            return a.m<b.m
+                        end)
+                        best={z=z,cap=cap,pans=worst,group=priorityGroup}
                     end
                 end
             end
