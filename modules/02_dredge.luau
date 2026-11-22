@@ -626,7 +626,7 @@ local function timedDredgeFlight(target,id)
         hook=character.DescendantAdded:Connect(disableCollision)
         humanoid.AutoRotate=false
         humanoid.PlatformStand=true
-        local speed=math.clamp(tonumber(E.GalaxisDredgeNoclipSpeed) or 125,50,250)
+        local speed=math.clamp(tonumber(E.GalaxisDredgeNoclipSpeed) or 60,20,250)
         local began=os.clock()
         local previous=os.clock()
         local startDistance=(root().Position-target.Position).Magnitude
