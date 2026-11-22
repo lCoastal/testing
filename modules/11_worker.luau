@@ -289,12 +289,13 @@ task.spawn(function()
     end
 end)
 
--- Timed-zone anti-stuck recovery.
--- Respawn ONLY when Dredge is actually navigating into/out of Timelocked
--- Sanctuary or Infernal Heart and position has not advanced for 15 seconds.
--- Standing still to dig, pan, shake, talk or wait for a timed gate is normal.
+-- Timed-zone Dredge anti-stuck: ASK the active walkRoute to perform a
+-- slow noclip recovery. Do not respawn or drive the character from a second
+-- movement task; the current navigation coroutine owns each checkpoint.
 S.timedZoneStuckSeconds=15
-S.timedZoneStuckLastRespawn=-math.huge
+S.timedZoneFlightLastAt=-math.huge
+S.timedZoneFlightRequested=false
+S.timedZoneFlightActive=false
 task.spawn(function()
     local lastRoot=nil
     local lastPosition=nil
@@ -303,13 +304,12 @@ task.spawn(function()
     local lastTravelKey=nil
     while S.alive do
         task.wait(.35)
-        local movingAction=S.traceCurrentAction=="DREDGE_ZONE_TRAVEL"
         local currentWork=tostring(S.dredgeCurrentWork or "")
-        local walkingWork=currentWork:find("Walking ",1,true)==1
-            or currentWork:find("Fast Travel:",1,true)==1
-        local timedOrigin=S.dredgeAt=="Timelocked Sanctuary"
+        local isWalking=S.traceCurrentAction=="DREDGE_ZONE_TRAVEL"
+            or currentWork:find("Walking ",1,true)==1
+        local timedZone=S.dredgeAt=="Timelocked Sanctuary"
             or S.dredgeAt=="Infernal Heart"
-        local timedDestination=S.dredgeCurrent=="Timelocked Sanctuary"
+            or S.dredgeCurrent=="Timelocked Sanctuary"
             or S.dredgeCurrent=="Infernal Heart"
         local c=P.Character
         local hum=c and c:FindFirstChildOfClass("Humanoid")
@@ -317,54 +317,41 @@ task.spawn(function()
         local watching=S.running and S.dredgeWanted and S.dredge
             and not S.treasureBusy and not S.treasureDredgePaused
             and not S.dredgeRespawnPending
-            and (timedOrigin or timedDestination)
-            and (movingAction or walkingWork)
-            and hum and hum.Health>0 and r
+            and timedZone and isWalking and hum and hum.Health>0 and r
         local key=tostring(S.dredgeAt).."|"..tostring(S.dredgeCurrent)
         if not watching then
-            lastRoot=nil
-            lastPosition=nil
-            lastToken=nil
-            lastTravelKey=nil
+            S.timedZoneFlightRequested=false
+            lastRoot=nil;lastPosition=nil;lastToken=nil;lastTravelKey=nil
+            lastProgressAt=os.clock()
+            continue
+        end
+        if S.timedZoneFlightActive then
+            lastPosition=r.Position
             lastProgressAt=os.clock()
             continue
         end
         if r~=lastRoot or S.token~=lastToken or key~=lastTravelKey then
-            lastRoot=r
-            lastPosition=r.Position
-            lastToken=S.token
-            lastTravelKey=key
+            lastRoot=r;lastPosition=r.Position
+            lastToken=S.token;lastTravelKey=key
             lastProgressAt=os.clock()
             continue
         end
-        -- Change in real 3D position, not merely MoveTo being called.
-        -- 3 studs of movement clears the stall clock.
         if (r.Position-lastPosition).Magnitude>=3 then
             lastPosition=r.Position
             lastProgressAt=os.clock()
+            S.timedZoneFlightRequested=false
             continue
         end
-        local stalledFor=os.clock()-lastProgressAt
-        if stalledFor>=S.timedZoneStuckSeconds
-            and os.clock()-S.timedZoneStuckLastRespawn>=45 then
-            S.timedZoneStuckLastRespawn=os.clock()
-            S.diagEvent("TIMED_ZONE_STUCK_RESPAWN",string.format(
-                "stalled %.1fs | from=%s to=%s | action=%s",
-                stalledFor,tostring(S.dredgeAt),
-                tostring(S.dredgeCurrent),currentWork))
-            dredgeText("Timed-zone travel stuck 15s; respawning to recover Dredge")
-            lastRoot=nil
-            lastPosition=nil
+        if os.clock()-lastProgressAt>=S.timedZoneStuckSeconds
+            and not S.timedZoneFlightRequested
+            and os.clock()-S.timedZoneFlightLastAt>=45 then
+            S.timedZoneFlightRequested=true
+            S.timedZoneFlightLastAt=os.clock()
+            S.diagEvent("TIMED_ZONE_FLIGHT_REQUEST",string.format(
+                "No 3-stud progress in 15s | from=%s to=%s | work=%s",
+                tostring(S.dredgeAt),tostring(S.dredgeCurrent),currentWork))
+            dredgeText("Timed-zone path stuck 15s; using slow noclip route recovery")
             lastProgressAt=os.clock()
-            -- Let the existing Humanoid.Died / CharacterAdded Dredge
-            -- recovery restart the worker. Do NOT call stop() here:
-            -- stop() would discard the active quest and clear the UI.
-            local killed=pcall(function()
-                hum.Health=0
-            end)
-            if not killed then
-                S.diagEvent("TIMED_ZONE_RESPAWN_FAILED","Humanoid.Health write rejected")
-            end
         end
     end
 end)
