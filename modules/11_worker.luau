@@ -18,6 +18,8 @@
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
         S.treasureAwaitingQuestBoundary=false
         S.treasureDredgeQuestReady=false
+        S.treasureTaskReason=nil
+        S.dredgeTaskSeen={}
         S.enchantedRecording=nil
         -- Preserve the recorded Enchanted entry path across OFF -> ON.
         -- Restarting without that path previously broke the return route.
