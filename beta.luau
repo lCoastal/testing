@@ -1,7 +1,7 @@
 -- GALAXIS HUB | MODULAR BETA LOADER
 -- Execute this file only. Feature code lives in /modules and shares one isolated environment.
 local BASE = "https://raw.githubusercontent.com/lCoastal/testing/main/modules/"
-local CACHE_BUSTER = "20261123-dredge-maps-two-column-no-scroll-v1"
+local CACHE_BUSTER = "20261123-treasure-quick-retries-v1"
 local MODULES = {
     {"01_core.luau", "Core and shared services"},
     {"02_dredge.luau", "Dredge routing and quest engine"},
