@@ -623,56 +623,91 @@ local function timedDredgeFlight(target,id)
     end
     local character=P.Character
     local humanoid=character and character:FindFirstChildOfClass("Humanoid")
-    if not character or not humanoid or humanoid.Health<=0 or not root() then
+    local startRoot=root()
+    if not character or not humanoid or humanoid.Health<=0 or not startRoot then
         return false,"Character unavailable for recovery flight"
     end
+
     local oldAuto=humanoid.AutoRotate
     local oldPlatform=humanoid.PlatformStand
     local collisions={}
-    local function disableCollision(obj)
+    local function ghost(obj)
         if not obj:IsA("BasePart") then return end
         if collisions[obj]==nil then collisions[obj]=obj.CanCollide end
-        -- Per-frame enforcement below is intentional: character controllers
-        -- can restore collisions on torso and limbs while flying.
         obj.CanCollide=false
     end
-    local hook=nil
-    local ok,err=pcall(function()
-        for _,part in ipairs(character:GetDescendants()) do disableCollision(part) end
-        hook=character.DescendantAdded:Connect(disableCollision)
-        humanoid.AutoRotate=false
-        humanoid.PlatformStand=true
-        local speed=math.clamp(tonumber(E.GalaxisDredgeNoclipSpeed) or 60,20,250)
-        local began=os.clock()
-        local previous=os.clock()
-        local startDistance=(root().Position-target.Position).Magnitude
-        local limit=math.clamp(startDistance/speed*3+12,12,160)
-        while valid(id) and S.dredge and S.dredgeWanted
-            and not S.treasureBusy and humanoid.Health>0
-            and os.clock()-began<limit do
-            local avatar=root()
-            if not avatar then break end
-            -- True character noclip, not just an airborne MoveTo:
-            -- keep every character BasePart non-collidable throughout
-            -- each flight step, even if game scripts reset them.
-            for _,part in ipairs(character:GetDescendants()) do
-                if part:IsA("BasePart") then
-                    disableCollision(part)
-                end
+    for _,part in ipairs(character:GetDescendants()) do ghost(part) end
+    local added=character.DescendantAdded:Connect(ghost)
+    local stepped=game:GetService("RunService").Stepped:Connect(function()
+        if not character.Parent then return end
+        for part in pairs(collisions) do
+            if part.Parent and part.CanCollide then
+                pcall(function() part.CanCollide=false end)
             end
-            local delta=target.Position-avatar.Position
-            if delta.Magnitude<=7 then break end
-            local now=os.clock()
-            local dt=math.clamp(now-previous,1/120,.11)
-            previous=now
-            local step=math.min(delta.Magnitude,speed*dt)
-            avatar.AssemblyLinearVelocity=Vector3.zero
-            avatar.AssemblyAngularVelocity=Vector3.zero
-            avatar.CFrame=CFrame.new(avatar.Position+delta.Unit*step)*target.Rotation
-            task.wait()
         end
     end)
-    if hook then hook:Disconnect() end
+    humanoid.AutoRotate=false
+    humanoid.PlatformStand=true
+
+    local speed=math.clamp(tonumber(E.GalaxisDredgeNoclipSpeed) or 60,20,250)
+    local source=startRoot.Position
+    local altitude=math.max(source.Y,target.Position.Y)+26
+    local points={
+        Vector3.new(source.X,altitude,source.Z),
+        Vector3.new(target.Position.X,altitude,target.Position.Z),
+        target.Position
+    }
+    local maxDistance=(points[1]-source).Magnitude+
+        (points[2]-points[1]).Magnitude+(points[3]-points[2]).Magnitude
+    local limit=math.clamp(maxDistance/speed*3+12,15,170)
+    local began=os.clock()
+    local failure=nil
+    local reached=false
+    local ok,err=pcall(function()
+        for leg,destination in ipairs(points) do
+            local last=os.clock()
+            local best=math.huge
+            local lastProgress=os.clock()
+            while valid(id) and S.dredge and S.dredgeWanted
+                and not S.treasureBusy and humanoid.Health>0
+                and P.Character==character
+                and os.clock()-began<limit do
+                local avatar=root()
+                if not avatar then
+                    failure="No root during recovery flight"
+                    break
+                end
+                local delta=destination-avatar.Position
+                local distance=delta.Magnitude
+                if distance<=3 then break end
+                if distance<best-1 then
+                    best=distance
+                    lastProgress=os.clock()
+                elseif os.clock()-lastProgress>6 then
+                    failure="Recovery flight stuck at elevated leg "..leg
+                    break
+                end
+                local now=os.clock()
+                local dt=math.clamp(now-last,1/120,.08)
+                last=now
+                local length=math.min(distance,speed*dt)
+                avatar.AssemblyLinearVelocity=Vector3.zero
+                avatar.AssemblyAngularVelocity=Vector3.zero
+                avatar.CFrame=CFrame.new(avatar.Position+delta.Unit*length)*target.Rotation
+                task.wait()
+            end
+            if failure or not valid(id) or not S.dredge then break end
+            local avatar=root()
+            if not avatar or (avatar.Position-destination).Magnitude>6 then
+                failure="Recovery flight failed leg "..leg
+                break
+            end
+        end
+        if not failure then reached=true end
+    end)
+
+    stepped:Disconnect()
+    added:Disconnect()
     for part,canCollide in pairs(collisions) do
         if part.Parent then pcall(function() part.CanCollide=canCollide end) end
     end
@@ -687,11 +722,9 @@ local function timedDredgeFlight(target,id)
     end
     if not ok then return false,"Recovery flight exception: "..tostring(err) end
     if not valid(id) then return false,"Recovery flight cancelled" end
-    if not avatar or (avatar.Position-target.Position).Magnitude>12 then
-        return false,"Flight could not reach checkpoint (server movement correction)"
-    end
+    if not reached then return false,failure or "Recovery flight timed out / corrected" end
     if not stableAt(target,id,15,.35,2.5) then
-        return false,"Flight checkpoint did not remain stable"
+        return false,"Recovery flight checkpoint did not remain stable"
     end
     return true
 end
