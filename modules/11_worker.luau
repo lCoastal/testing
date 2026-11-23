@@ -16,6 +16,8 @@
         if type(getsenv)~="function" then dredgeText("Executor requires getsenv");return end
         S.dredgeRestore={dig=S.dig,water=S.water,zone=S.activeZone}
         S.dredge=true;S.dredgeCurrent=nil;S.dredgeGroup=nil
+        S.treasureAwaitingQuestBoundary=false
+        S.treasureDredgeQuestReady=false
         S.enchantedRecording=nil
         -- Preserve the recorded Enchanted entry path across OFF -> ON.
         -- Restarting without that path previously broke the return route.
@@ -76,8 +78,12 @@
             -- switching to Treasure. Do not interrupt objective collection,
             -- travel, or the turn-in itself. Auto Farm still uses its normal
             -- between-pan handoff.
-            if S.treasureRequested and S.treasureCycle
-                and (not S.dredge or S.treasureDredgeQuestReady) then
+            local questBoundaryTreasure=S.dredge
+                and S.treasureDredgeQuestReady
+                and S.treasureCanStart and S.treasureCanStart()
+            if S.treasureCycle
+                and (S.treasureRequested or questBoundaryTreasure)
+                and (not S.dredge or questBoundaryTreasure) then
                 local trOk,trErr=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
                 if not trOk then
                     S.treasureLastError=tostring(trErr)
