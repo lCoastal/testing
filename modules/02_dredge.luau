@@ -514,7 +514,9 @@ end
     -- the previous quest has ended. The poller can skip the short-lived
     -- "turnin" snapshot, so comparing ONLY old->new modes loses the handoff.
     local nextMode=questMode(state)
-    if S.treasureAwaitingQuestBoundary
+    if (S.treasureAwaitingQuestBoundary or
+        (old and questMode(old)=="turnin" and
+         S.treasureEnabled and S.treasureCanStart and S.treasureCanStart()))
         and (nextMode=="available" or nextMode=="unavailable") then
         S.treasureAwaitingQuestBoundary=false
         S.treasureDredgeQuestReady=true
