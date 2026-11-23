@@ -73,6 +73,12 @@ end
             if not pause(.3,id) then return end
             continue
         end
+        -- An individual Dredge Collect task may have completed during
+        -- the last pan. Handoff BEFORE starting the next dig/pan cycle.
+        if S.dredge and S.treasureDredgeQuestReady
+            and S.treasureCanStart and S.treasureCanStart() then
+            return "TREASURE_REQUESTED"
+        end
         target=S.capacity() or target
         local cycleStart=os.clock()
         S.diagEvent("CYCLE_START","fill="..tostring(fill(r))..
@@ -290,6 +296,12 @@ end
             return "TREASURE_FARM_CYCLE_DONE"
         end
         autoSell(id,S.cycles)
+        -- Read task progress after a completed pan, before beginning any
+        -- other objective. This lets task 1 hand off without waiting for
+        -- the Dredge Master turn-in at the end of the whole quest.
+        if S.dredge and S.trackDredgeTaskCompletion then
+            S.trackDredgeTaskCompletion(getQuest() or S.dredgeServerProgress)
+        end
         -- Run treasure routing only after the full pan cycle has completed.
         if S.treasureCycle then
             local ok,err=pcall(S.treasureCycle,id,r)
