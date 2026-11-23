@@ -600,6 +600,9 @@ S.treasureCycle=function(id,r)
         S.treasureWasDredge=nil
         tStatus("Treasure error: "..S.treasureLastError)
     end
+    -- Tell the worker that an actual Treasure attempt was made.
+    -- Early returns (cooldown, insufficient maps, disabled) report nil.
+    return true
 end
 
 -- Independent loop: farm at the saved dig/water positions until a
