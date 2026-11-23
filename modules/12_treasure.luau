@@ -197,7 +197,12 @@ end
 local HEIGHT_THRESHOLD=36
 local FLY_SPEED=42
 local FLY_CEILING_SECONDS=180
+local FLY_CLEARANCE=26
+local RunService=game:GetService("RunService")
 
+-- Maintain local noclip on every physics step. A single CanCollide=false
+-- assignment gets overwritten by character refreshes / other scripts.
+-- On exit, restore the initial values even when flight fails.
 local function tFlight(target,id,description)
     local character=P.Character
     local humanoid=character and character:FindFirstChildOfClass("Humanoid")
@@ -205,69 +210,112 @@ local function tFlight(target,id,description)
     if not character or not startRoot or not humanoid or humanoid.Health<=0 then
         return false,"Character unavailable for flight"
     end
+
     local collisions={}
     local function ghost(part)
-        if part:IsA("BasePart") and collisions[part]==nil then
-            collisions[part]=part.CanCollide
-        end
-        if part:IsA("BasePart") then part.CanCollide=false end
+        if not part:IsA("BasePart") then return end
+        if collisions[part]==nil then collisions[part]=part.CanCollide end
+        part.CanCollide=false
     end
     for _,part in ipairs(character:GetDescendants()) do ghost(part) end
-    local added=character.DescendantAdded:Connect(function(part)
-        if part:IsA("BasePart") then ghost(part) end
-    end)
-    local originalAutoRotate=humanoid.AutoRotate
-    local originalPlatformStand=humanoid.PlatformStand
-    humanoid.AutoRotate=false
-    humanoid.PlatformStand=true
-    local flightError=nil
-    local reached=false
-    local began=os.clock()
-    tStatus("Slow noclip flight to "..description)
-    local ok,exception=pcall(function()
-        local last=os.clock()
-        while valid(id) and S.treasureEnabled
-            and os.clock()-began<FLY_CEILING_SECONDS do
-            local r=root()
-            if not r or humanoid.Health<=0 then
-                flightError="Character lost during flight"
-                break
+
+    local added=character.DescendantAdded:Connect(ghost)
+    local stepped=RunService.Stepped:Connect(function()
+        if not character.Parent then return end
+        for part in pairs(collisions) do
+            if part.Parent and part.CanCollide then
+                pcall(function() part.CanCollide=false end)
             end
-            local difference=target.Position-r.Position
-            if difference.Magnitude<=4.5 then
-                reached=true
-                break
-            end
-            local now=os.clock()
-            local dt=math.clamp(now-last,1/120,.11)
-            last=now
-            local step=math.min(difference.Magnitude,FLY_SPEED*dt)
-            local nextPos=r.Position+difference.Unit*step
-            r.AssemblyLinearVelocity=Vector3.zero
-            r.AssemblyAngularVelocity=Vector3.zero
-            r.CFrame=CFrame.new(nextPos)*target.Rotation
-            task.wait()
         end
     end)
+
+    local oldAutoRotate=humanoid.AutoRotate
+    local oldPlatformStand=humanoid.PlatformStand
+    humanoid.AutoRotate=false
+    humanoid.PlatformStand=true
+    local reached=false
+    local failure=nil
+    local began=os.clock()
+    local source=startRoot.Position
+
+    -- Three legs: rise above the surrounding wall, cross above it,
+    -- then descend to the exact map coordinate. On long trips this
+    -- avoids cutting a straight line through caves and buildings.
+    local ceiling=math.max(source.Y,target.Position.Y)+FLY_CLEARANCE
+    local waypoints={
+        Vector3.new(source.X,ceiling,source.Z),
+        Vector3.new(target.Position.X,ceiling,target.Position.Z),
+        target.Position
+    }
+    local ok,exception=pcall(function()
+        for leg,destination in ipairs(waypoints) do
+            local last=os.clock()
+            local stallAt=os.clock()
+            local bestRemaining=math.huge
+            tStatus(string.format("Treasure flight %d/3 | %s",leg,description))
+            while valid(id) and S.treasureEnabled
+                and os.clock()-began<FLY_CEILING_SECONDS do
+                local r=root()
+                if not r or humanoid.Health<=0 or P.Character~=character then
+                    failure="Character lost or respawned during flight"
+                    break
+                end
+                -- Refresh all collision flags, including dynamically added parts.
+                for part in pairs(collisions) do
+                    if part.Parent then part.CanCollide=false end
+                end
+                local diff=destination-r.Position
+                local distance=diff.Magnitude
+                if distance<=3.0 then break end
+                if distance<bestRemaining-1 then
+                    bestRemaining=distance
+                    stallAt=os.clock()
+                elseif os.clock()-stallAt>6 then
+                    failure="Flight stalled / server collision correction at leg "..leg
+                    break
+                end
+                local now=os.clock()
+                local dt=math.clamp(now-last,1/120,.08)
+                last=now
+                local length=math.min(distance,FLY_SPEED*dt)
+                local nextPosition=r.Position+diff.Unit*length
+                r.AssemblyLinearVelocity=Vector3.zero
+                r.AssemblyAngularVelocity=Vector3.zero
+                r.CFrame=CFrame.new(nextPosition)*target.Rotation
+                task.wait()
+            end
+            if failure or not valid(id) or not S.treasureEnabled then break end
+            local r=root()
+            if not r or (r.Position-destination).Magnitude>6 then
+                failure="Could not complete flight leg "..leg
+                break
+            end
+        end
+        if not failure then reached=true end
+    end)
+
+    stepped:Disconnect()
     added:Disconnect()
     for part,canCollide in pairs(collisions) do
-        if part.Parent then pcall(function() part.CanCollide=canCollide end) end
+        if part.Parent then
+            pcall(function() part.CanCollide=canCollide end)
+        end
     end
     if humanoid.Parent then
-        humanoid.AutoRotate=originalAutoRotate
-        humanoid.PlatformStand=originalPlatformStand
+        humanoid.AutoRotate=oldAutoRotate
+        humanoid.PlatformStand=oldPlatformStand
     end
     local finalRoot=root()
     if finalRoot then
         finalRoot.AssemblyLinearVelocity=Vector3.zero
         finalRoot.AssemblyAngularVelocity=Vector3.zero
     end
+
     if not ok then return false,"Flight runtime error: "..tostring(exception) end
     if not valid(id) or not S.treasureEnabled then return false,"Flight cancelled" end
-    if not reached then return false,flightError or "Flight timed out / movement corrected" end
-    -- Ensure the server did not rubber-band the avatar before we dig.
+    if not reached then return false,failure or "Flight timed out" end
     if not stableAt(target,id,9,.35,2.5) then
-        return false,"Flight destination was not stable"
+        return false,"Flight position corrected by server near destination"
     end
     return true
 end
