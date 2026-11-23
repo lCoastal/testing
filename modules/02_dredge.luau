@@ -424,6 +424,46 @@ end
     table.sort(list,function(a,b) return a.m<b.m end)
     return list,done
 end
+-- Treasure handoff is tied to completion of ANY INDIVIDUAL Collect task,
+-- not to the end of a whole Dredge quest.
+-- Track each objective only once per quest so completed objectives do not
+-- retrigger an endless Treasure loop on every progress refresh.
+function S.trackDredgeTaskCompletion(state)
+    if type(state)~="table" or type(state.StepProgress)~="table" then return end
+    if not S.dredge or not S.running then return end
+    S.dredgeTaskSeen=S.dredgeTaskSeen or {}
+    local seen=S.dredgeTaskSeen
+    local nowKeys={}
+    local completed={}
+    for _,p in pairs(state.StepProgress) do
+        if type(p)=="table" and type(p.Collect)=="string" and p.Collect~="" then
+            local qty=tonumber(p.Amount)
+            local progress=tonumber(p.Progress) or 0
+            if qty and qty>0 then
+                local key=p.Collect.."|"..tostring(qty)
+                nowKeys[key]=true
+                if progress>=qty-1e-7 and not seen[key] then
+                    completed[#completed+1]=p.Collect
+                    seen[key]=true
+                end
+            end
+        end
+    end
+    -- Newly completed tasks mark a one-time boundary, but only dispatch
+    -- when the user's map threshold is already met.
+    if #completed>0 then
+        local eligible=S.treasureCanStart and S.treasureCanStart()
+        S.diagEvent("DREDGE_TASK_COMPLETE",
+            table.concat(completed,", ").." | maps ready="..tostring(eligible))
+        if eligible and not S.treasureDredgeQuestReady then
+            S.treasureDredgeQuestReady=true
+            S.treasureAwaitingQuestBoundary=false
+            S.treasureTaskReason="Completed task: "..table.concat(completed,", ")
+            S.dredgeNextWork="Collect Treasure Maps; then continue remaining Dredge tasks"
+            S.diagEvent("TREASURE_TASK_HANDOFF",S.treasureTaskReason)
+        end
+    end
+end
       function questsRemote()
     local f=RS:FindFirstChild("Remotes")
     return f and f:FindFirstChild("Quests")
@@ -536,6 +576,8 @@ end
     -- repeatedly timed out in the same windows as Collect/Sell stalls.
     -- Fallback is still available when the local quest cache is missing.
     local localQuest=getQuest()
+    -- Observe objective completions even while dredgeCycle is busy panning.
+    if nextMode=="active" then S.trackDredgeTaskCompletion(localQuest) end
     local needsServerProgress=not localQuest
         or type(localQuest.StepProgress)~="table"
     local busyMining=S.traceCurrentAction=="COLLECT_TO_CAPACITY"
@@ -549,7 +591,10 @@ end
             -- StepProgress query must not block future quest polls.
             local ok,result=invoke(fn,id,"DredgeMaster")
             if ok and type(result)=="table" and type(result.StepProgress)=="table"
-              and valid(id) then S.dredgeServerProgress=result end
+              and valid(id) then
+                S.dredgeServerProgress=result
+                S.trackDredgeTaskCompletion(result)
+            end
         end
     elseif questMode(state)~="active" then
         S.dredgeServerProgress=nil
@@ -1830,6 +1875,11 @@ end
         S.dredgeTransitionAt=os.clock()
         -- Observed Cobalt args: quest, nil, "DredgeMaster".
         local ok,res=startQuest(id)
+        if ok and res~=false then
+            -- New quest: reset per-task completion history.
+            S.dredgeTaskSeen={}
+            S.treasureTaskReason=nil
+        end
         dredgeText(ok and res~=false and
             ("StartQuest requested ("..S.dredgeTransitionAttempts.."/3); verifying")
             or ("StartQuest attempt "..S.dredgeTransitionAttempts.."/3 not confirmed"))
@@ -2078,6 +2128,7 @@ end
         S.dredgeTransitionMode="active"
         S.dredgeTransitionAttempts=0
         local state=getQuest() or S.dredgeServerProgress
+        S.trackDredgeTaskCompletion(state)
         wants,done=remaining(state)
         if not wants then
             dredgeText(tostring(done or "Waiting for StepProgress"))
