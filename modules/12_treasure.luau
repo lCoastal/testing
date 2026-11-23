@@ -17,40 +17,44 @@ S.treasureRetryAfter={}
 S.treasureTripSkipped={}
 S.treasureLastError=nil
 
--- Dredge + Treasure share a single vertical workflow.
-S.treasureTitle=label("2  /  TREASURE MAP COLLECTION",14,591,312,26,13,FG)
-relocate(S.treasureTitle,treasurePage,14,591)
+-- Dredge and Maps share one WIDE tab with no page scrolling.
+-- Left column belongs to Dredge; these controls occupy the right column.
+S.treasureTitle=label("2  /  TREASURE MAPS",355,4,330,24,13,FG)
+relocate(S.treasureTitle,treasurePage,355,4)
 S.treasureInstructions=label(
-    "Order: finish ANY Dredge mineral task > collect maps > continue SAME quest.\n"..
-    "Only starts at map threshold; waits for current pan to finish, then drains maps.",
-    14,622,312,58,10,MUTED)
+    "After an individual Dredge task finishes: collect maps, then resume the SAME quest.\n"..
+    "Threshold starts one run; all available maps are collected before returning.",
+    355,32,330,53,10,MUTED)
 S.treasureInstructions.TextWrapped=true
 S.treasureInstructions.TextYAlignment=Enum.TextYAlignment.Top
-relocate(S.treasureInstructions,treasurePage,14,622)
-S.treasureStatus=label("OFF | Turn on Auto Dig to collect Treasure Maps.",14,685,312,48,10,MUTED)
-relocate(S.treasureStatus,treasurePage,14,685)
+relocate(S.treasureInstructions,treasurePage,355,32)
+S.treasureStatus=label("OFF | Turn on Auto Dig to collect Treasure Maps.",355,90,330,50,10,MUTED)
+relocate(S.treasureStatus,treasurePage,355,90)
 S.treasureStatus.TextWrapped=true
-S.treasureToggle=button("AUTO DIG MAPS: OFF",14,740,312,36,treasurePage)
-S.treasureMinLabel=label("START TREASURE RUN AT THIS MANY MAPS",14,787,228,31,10,MUTED)
-relocate(S.treasureMinLabel,treasurePage,14,787)
+S.treasureStatus.TextYAlignment=Enum.TextYAlignment.Top
+S.treasureToggle=button("AUTO DIG MAPS: OFF",355,148,330,36,treasurePage)
+S.treasureMinLabel=label("START TREASURE RUN AT MAP COUNT",355,194,244,28,10,MUTED)
+relocate(S.treasureMinLabel,treasurePage,355,194)
 S.treasureMinInput=make("TextBox",{
-    Position=UDim2.fromOffset(247,785),Size=UDim2.fromOffset(79,33),
+    Position=UDim2.fromOffset(607,190),Size=UDim2.fromOffset(78,33),
     BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
     Font=Enum.Font.GothamBold,TextSize=13,
     Text=tostring(S.treasureMinMaps),ClearTextOnFocus=false,
     TextXAlignment=Enum.TextXAlignment.Center
 },treasurePage)
-S.treasureScanButton=button("SCAN MAPS / SHOW NEXT ROUTE",14,829,312,34,treasurePage)
+S.treasureScanButton=button("SCAN MAPS / SHOW NEXT ROUTE",355,230,330,34,treasurePage)
 S.treasureScanButton.BackgroundColor3=PANEL
-S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,874),
-    Size=UDim2.fromOffset(312,270),BackgroundColor3=PANEL,BorderSizePixel=0,
-    TextColor3=FG,PlaceholderColor3=MUTED,PlaceholderText="Map inventory, estimated order and route status.",
+S.treasureOutput=make("TextBox",{
+    Position=UDim2.fromOffset(355,273),
+    Size=UDim2.fromOffset(330,225),
+    BackgroundColor3=PANEL,BorderSizePixel=0,
+    TextColor3=FG,PlaceholderColor3=MUTED,
+    PlaceholderText="Map inventory, route preview and diagnostics.",
     Text="",ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,
-    TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
-    Font=Enum.Font.Code,TextSize=9},treasurePage)
-if treasurePage:IsA("ScrollingFrame") then
-    treasurePage.CanvasSize=UDim2.fromOffset(0,1170)
-end
+    TextXAlignment=Enum.TextXAlignment.Left,
+    TextYAlignment=Enum.TextYAlignment.Top,
+    Font=Enum.Font.Code,TextSize=9
+},treasurePage)
 
 local function tContainers()
     local out={}
