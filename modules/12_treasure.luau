@@ -21,8 +21,8 @@ S.treasureLastError=nil
 S.treasureTitle=label("2  /  TREASURE MAP COLLECTION",14,591,312,26,13,FG)
 relocate(S.treasureTitle,treasurePage,14,591)
 S.treasureInstructions=label(
-    "Order: finish current Dredge quest > turn in > collect maps > resume Dredge.\n"..
-    "Threshold starts one run; route then drains every available map. Stops only on OFF or error.",
+    "Order: finish ANY Dredge mineral task > collect maps > continue SAME quest.\n"..
+    "Only starts at map threshold; waits for current pan to finish, then drains maps.",
     14,622,312,58,10,MUTED)
 S.treasureInstructions.TextWrapped=true
 S.treasureInstructions.TextYAlignment=Enum.TextYAlignment.Top
@@ -678,6 +678,10 @@ S.treasureCycle=function(id,r)
     end
     S.treasureRequested=false
     local ok,err=pcall(tRun,id)
+    -- Any completed attempt consumes this task boundary. Never run
+    -- Treasure repeatedly for the same already-completed mineral task.
+    S.treasureDredgeQuestReady=false
+    S.treasureAwaitingQuestBoundary=false
     if not ok then
         S.treasureBusy=false
         S.treasureLastError=tostring(err)
@@ -899,7 +903,8 @@ local function tScan()
         " | raw status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status)..
         " | step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step)
     lines[#lines+1]="Quest boundary: "..tostring(S.treasureDredgeQuestReady)..
-        " | awaiting turn-in: "..tostring(S.treasureAwaitingQuestBoundary)
+        " | turn-in pending: "..tostring(S.treasureAwaitingQuestBoundary)..
+        " | task: "..tostring(S.treasureTaskReason or "none")
     lines[#lines+1]="Requested: "..tostring(S.treasureRequested)..
         " | dispatcher: "..tostring(S.treasureDispatchBusy)..
         " | busy: "..tostring(S.treasureBusy)..
@@ -920,7 +925,7 @@ bind(S.treasureToggle.MouseButton1Click,function()
             tStatus("AUTO DIG ON | Set DIG and WATER on FARM tab first")
         elseif n>=S.treasureMinMaps then
             tStatus(S.running
-                and (S.dredge and "AUTO DIG ON | Waiting for Dredge quest turn-in" or "AUTO DIG ON | Treasure after current pan cycle")
+                and (S.dredge and "AUTO DIG ON | Waiting for a Dredge TASK to finish" or "AUTO DIG ON | Treasure after current pan cycle")
                 or "AUTO DIG ON | Collecting existing maps")
         else
             tStatus("AUTO DIG ON | Farming maps at saved DIG and WATER positions")
