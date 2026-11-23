@@ -74,6 +74,13 @@
 
     task.spawn(function()
         while valid(id) do
+            -- A dedicated Treasure dispatcher may take over while this worker
+            -- was suspended in a quest or movement function. Never issue
+            -- concurrent pan/dig/movement requests during that handoff.
+            if S.treasureBusy or S.treasureDispatchBusy then
+                task.wait(.15)
+                continue
+            end
             -- During Dredge, wait for a CONFIRMED quest turn-in before
             -- switching to Treasure. Do not interrupt objective collection,
             -- travel, or the turn-in itself. Auto Farm still uses its normal
