@@ -25,14 +25,18 @@
     end
     return make(class,props,Body)
 end
-      farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage,packPage=
-    page(),page(true),page(),page(),page(),page(),page()
-      TAB_NAMES={"FARM","DREDGE","ZONE","TREASURE","REFORGE","DEBUG","PACK"}
-      TAB_PAGES={farmPage,dredgePage,diagnosticPage,treasurePage,reforgePage,livePage,packPage}
+      farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage=
+    page(),page(true),page(),page(),page(),page()
+-- Dredge and Treasure share one scrolling workflow tab.
+treasurePage=dredgePage
+dredgePage.CanvasSize=UDim2.fromOffset(0,1050)
+      TAB_NAMES={"FARM","DREDGE + MAPS","ZONE","REFORGE","DEBUG","PACK"}
+      TAB_PAGES={farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage}
       tabButtons={}
 for i,name in ipairs(TAB_NAMES) do
-    tabButtons[i]=button(name,4+(i-1)*47,36,45,32,Body)
-    tabButtons[i].TextSize=8
+    local x=4+(i-1)*55
+    tabButtons[i]=button(name,x,36,53,32,Body)
+    tabButtons[i].TextSize=name=="DREDGE + MAPS" and 7 or 8
 end
 -- Show tabs and make them clickable before constructing the complex
 -- diagnostic/reforge pages. A later setup error can no longer leave a
@@ -352,11 +356,5 @@ S.editPresets.MouseButton1Click:Connect(function()
     S.presetEditor.Size=UDim2.new(1,-20,1,S.presetEditor.Visible and -70 or -181)
 end)
 
--- Treasure maps intentionally have no automation yet.
-S.treasureTitle=label("AUTO TREASURE MAP",14,23,312,32,13,FG)
-relocate(S.treasureTitle,treasurePage,14,23)
-S.treasureNote=label(
-    "Coming later. No treasure map remotes are being fired.",
-    14,70,312,62,12,MUTED)
-S.treasureNote.TextWrapped=true
-relocate(S.treasureNote,treasurePage,14,70)
+-- Treasure controls are created by 12_treasure.luau underneath
+-- the Dredge section in this same scrolling page.
