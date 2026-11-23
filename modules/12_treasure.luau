@@ -787,6 +787,45 @@ local function tStandaloneLoop(id)
     end
 end
 
+-- Dedicated Dredge -> Treasure dispatcher.
+-- The Dredge worker may still be inside a completed pan, route callback,
+-- or timed quest transition. Once a quest boundary is confirmed, this
+-- dispatcher owns the handoff rather than depending on another worker tick.
+S.treasureDispatchBusy=false
+task.spawn(function()
+    while S.alive do
+        task.wait(.25)
+        if S.running and S.dredge and S.treasureDredgeQuestReady
+            and S.treasureCanStart and S.treasureCanStart()
+            and not S.treasureDispatchBusy then
+            local action=tostring(S.traceCurrentAction or "")
+            local mining=action=="COLLECT_TO_CAPACITY"
+                or action=="PAN_INVOKE"
+                or action=="SHAKE_LOOP"
+            if not mining then
+                S.treasureDispatchBusy=true
+                local id=S.token
+                S.diagEvent("TREASURE_DISPATCH",
+                    "Quest boundary confirmed; maps="..#tReadyMaps()..
+                    " threshold="..S.treasureMinMaps..
+                    " action="..action)
+                local ok,result=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
+                if ok and result==true then
+                    S.treasureDredgeQuestReady=false
+                    S.treasureAwaitingQuestBoundary=false
+                    S.diagEvent("TREASURE_DISPATCH_DONE","Route attempted")
+                elseif not ok then
+                    S.treasureLastError=tostring(result)
+                    S.diagEvent("TREASURE_DISPATCH_ERROR",S.treasureLastError)
+                    tStatus("Treasure dispatcher failed: "..S.treasureLastError)
+                    S.treasureNextTryAt=os.clock()+10
+                end
+                S.treasureDispatchBusy=false
+            end
+        end
+    end
+end)
+
 task.spawn(function()
     while S.alive do
         task.wait(.6)
