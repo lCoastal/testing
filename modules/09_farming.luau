@@ -80,6 +80,7 @@ end
             return "TREASURE_REQUESTED"
         end
         target=S.capacity() or target
+        S.treasurePanCycleActive=true
         local cycleStart=os.clock()
         S.diagEvent("CYCLE_START","fill="..tostring(fill(r))..
             " target="..tostring(target).." zone="..tostring(S.dredgeAt or S.activeZone))
@@ -296,6 +297,7 @@ end
             return "TREASURE_FARM_CYCLE_DONE"
         end
         autoSell(id,S.cycles)
+        S.treasurePanCycleActive=false
         -- Read task progress after a completed pan, before beginning any
         -- other objective. This lets task 1 hand off without waiting for
         -- the Dredge Master turn-in at the end of the whole quest.
