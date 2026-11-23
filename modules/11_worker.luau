@@ -72,8 +72,12 @@
 
     task.spawn(function()
         while valid(id) do
-            -- A treasure request takes priority over Dredge planning/travel.
-            if S.treasureRequested and S.treasureCycle then
+            -- During Dredge, wait for a CONFIRMED quest turn-in before
+            -- switching to Treasure. Do not interrupt objective collection,
+            -- travel, or the turn-in itself. Auto Farm still uses its normal
+            -- between-pan handoff.
+            if S.treasureRequested and S.treasureCycle
+                and (not S.dredge or S.treasureDredgeQuestReady) then
                 local trOk,trErr=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
                 if not trOk then
                     S.treasureLastError=tostring(trErr)
@@ -81,6 +85,9 @@
                         S.treasureStatus.Text="Treasure error: "..S.treasureLastError
                     end
                     S.treasureRequested=false
+                end
+                if S.dredge then
+                    S.treasureDredgeQuestReady=false
                 end
                 if S.treasureBusy then
                     repeat task.wait(.1) until not S.treasureBusy or not valid(id)
