@@ -17,28 +17,40 @@ S.treasureRetryAfter={}
 S.treasureTripSkipped={}
 S.treasureLastError=nil
 
-S.treasureTitle=label("AUTO TREASURE ROUTE",14,10,312,25,13,FG)
-relocate(S.treasureTitle,treasurePage,14,10)
-S.treasureStatus=label("OFF | Farms until your map threshold, then collects all maps.",14,39,312,38,10,MUTED)
-relocate(S.treasureStatus,treasurePage,14,39)
+-- Dredge + Treasure share a single vertical workflow.
+S.treasureTitle=label("2  /  TREASURE MAP COLLECTION",14,591,312,26,13,FG)
+relocate(S.treasureTitle,treasurePage,14,591)
+S.treasureInstructions=label(
+    "Order: finish current Dredge quest > turn in > collect maps > resume Dredge.\n"..
+    "Threshold starts one run; route then drains every available map. Stops only on OFF or error.",
+    14,622,312,58,10,MUTED)
+S.treasureInstructions.TextWrapped=true
+S.treasureInstructions.TextYAlignment=Enum.TextYAlignment.Top
+relocate(S.treasureInstructions,treasurePage,14,622)
+S.treasureStatus=label("OFF | Turn on Auto Dig to collect Treasure Maps.",14,685,312,48,10,MUTED)
+relocate(S.treasureStatus,treasurePage,14,685)
 S.treasureStatus.TextWrapped=true
-S.treasureToggle=button("AUTO DIG MAPS: OFF",14,82,312,36,treasurePage)
-S.treasureMinLabel=label("MAPS BEFORE TREASURE RUN",14,130,228,31,10,MUTED)
+S.treasureToggle=button("AUTO DIG MAPS: OFF",14,740,312,36,treasurePage)
+S.treasureMinLabel=label("START TREASURE RUN AT THIS MANY MAPS",14,787,228,31,10,MUTED)
+relocate(S.treasureMinLabel,treasurePage,14,787)
 S.treasureMinInput=make("TextBox",{
-    Position=UDim2.fromOffset(247,128),Size=UDim2.fromOffset(79,33),
+    Position=UDim2.fromOffset(247,785),Size=UDim2.fromOffset(79,33),
     BackgroundColor3=PANEL,BorderSizePixel=0,TextColor3=FG,
     Font=Enum.Font.GothamBold,TextSize=13,
     Text=tostring(S.treasureMinMaps),ClearTextOnFocus=false,
     TextXAlignment=Enum.TextXAlignment.Center
 },treasurePage)
-S.treasureScanButton=button("SCAN TREASURE MAPS",14,171,312,32,treasurePage)
+S.treasureScanButton=button("SCAN MAPS / SHOW NEXT ROUTE",14,829,312,34,treasurePage)
 S.treasureScanButton.BackgroundColor3=PANEL
-S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,211),
-    Size=UDim2.new(1,-28,1,-225),BackgroundColor3=PANEL,BorderSizePixel=0,
-    TextColor3=FG,PlaceholderColor3=MUTED,PlaceholderText="Map inventory and route status.",
+S.treasureOutput=make("TextBox",{Position=UDim2.fromOffset(14,874),
+    Size=UDim2.fromOffset(312,270),BackgroundColor3=PANEL,BorderSizePixel=0,
+    TextColor3=FG,PlaceholderColor3=MUTED,PlaceholderText="Map inventory, estimated order and route status.",
     Text="",ClearTextOnFocus=false,MultiLine=true,TextWrapped=false,
     TextXAlignment=Enum.TextXAlignment.Left,TextYAlignment=Enum.TextYAlignment.Top,
     Font=Enum.Font.Code,TextSize=9},treasurePage)
+if treasurePage:IsA("ScrollingFrame") then
+    treasurePage.CanvasSize=UDim2.fromOffset(0,1170)
+end
 
 local function tContainers()
     local out={}
