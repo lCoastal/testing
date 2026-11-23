@@ -92,7 +92,9 @@
                     end
                     S.treasureRequested=false
                 end
-                if S.dredge then
+                if questBoundaryTreasure then
+                    -- tRun temporarily sets S.dredge=false, so checking
+                    -- S.dredge here would leave this boundary flag sticky.
                     S.treasureDredgeQuestReady=false
                 end
                 if S.treasureBusy then
