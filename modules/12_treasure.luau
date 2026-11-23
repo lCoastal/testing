@@ -810,7 +810,8 @@ local function tScan()
     local list=tMaps()
     local available=tReadyMaps()
     local lines={"GALAXIS TREASURE MAPS","Maps in inventory: "..#list..
-        " | ready: "..#available.." | threshold: "..S.treasureMinMaps,""}
+        " | ready: "..#available.." | threshold: "..S.treasureMinMaps,
+        "Inventory list below (not the travel order):"}
     for i,m in ipairs(list) do
         lines[#lines+1]=string.format("%d. %s | %.1f, %.1f, %.1f | %s",
             i,m.region,m.pos.X,m.pos.Y,m.pos.Z,m.guid)
