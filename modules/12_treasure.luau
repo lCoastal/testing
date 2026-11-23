@@ -59,15 +59,30 @@ local function tContainers()
     if P.Character then out[#out+1]=P.Character end
     return out
 end
+-- Some map tools have no GUID. tostring(tool) only returns "Treasure Map",
+-- so using it as a key previously shared retry/cooldown between different maps.
+-- Weak keys keep session identifiers stable without retaining destroyed tools.
+S.treasureMapIdentities=setmetatable({},{__mode="k"})
+S.treasureMapIdentityNext=0
+local function tMapIdentity(tool)
+    local guid=tool:GetAttribute("GUID")
+    if guid~=nil and tostring(guid)~="" then return tostring(guid) end
+    local key=S.treasureMapIdentities[tool]
+    if not key then
+        S.treasureMapIdentityNext+=1
+        key="map-session-"..tostring(S.treasureMapIdentityNext)
+        S.treasureMapIdentities[tool]=key
+    end
+    return key
+end
 local function tMaps()
     local out={}
     for _,bag in ipairs(tContainers()) do
         for _,tool in ipairs(bag:GetChildren()) do
             if tool:IsA("Tool") and tool.Name=="Treasure Map" then
                 local pos,region=tool:GetAttribute("Location"),tool:GetAttribute("Region")
-                local guid=tool:GetAttribute("GUID")
                 if typeof(pos)=="Vector3" and type(region)=="string" and region~="" then
-                    out[#out+1]={tool=tool,pos=pos,region=region,guid=tostring(guid or tool)}
+                    out[#out+1]={tool=tool,pos=pos,region=region,guid=tMapIdentity(tool)}
                 end
             end
         end
