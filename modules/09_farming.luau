@@ -68,6 +68,13 @@ end
 -- early movement, automatic tuning, or nested recovery state machine.
       function farming(id,r,target)
     while valid(id) do
+        -- The independent Treasure dispatcher can claim the worker
+        -- BETWEEN completed pan cycles. Do not start another pan while
+        -- Treasure owns movement / pan equipment.
+        if S.treasureBusy or S.treasureDispatchBusy then
+            if not pause(.15,id) then return end
+            continue
+        end
         if S.dredge and not dredgeCycle(id) then
             if not valid(id) then return end
             if not pause(.3,id) then return end
