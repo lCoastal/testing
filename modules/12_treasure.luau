@@ -553,6 +553,14 @@ local function tRun(id)
     end
 end
 
+-- Used by the Dredge worker to arbitrate the quest boundary immediately,
+-- without relying on the 0.6-second background request update.
+S.treasureCanStart=function()
+    return S.treasureEnabled and not S.treasureBusy
+        and os.clock()>=(S.treasureNextTryAt or 0)
+        and #tReadyMaps()>=S.treasureMinMaps
+end
+
 -- One entry point works for the active farm worker and independent travel.
 S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
