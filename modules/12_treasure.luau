@@ -556,6 +556,11 @@ end
 -- One entry point works for the active farm worker and independent travel.
 S.treasureCycle=function(id,r)
     if not S.treasureEnabled or S.treasureBusy or not valid(id) then return end
+    -- Also protect the post-pan hook in farming(): finishing a pan is
+    -- NOT the same as finishing a Dredge quest.
+    if S.running and S.dredge and not S.treasureDredgeQuestReady then
+        return
+    end
     local n=#tReadyMaps()
     if n<S.treasureMinMaps then
         S.treasureRequested=false
@@ -738,7 +743,7 @@ bind(S.treasureToggle.MouseButton1Click,function()
             tStatus("AUTO DIG ON | Set DIG and WATER on FARM tab first")
         elseif n>=S.treasureMinMaps then
             tStatus(S.running
-                and "AUTO DIG ON | Treasure after current pan cycle"
+                and (S.dredge and "AUTO DIG ON | Waiting for Dredge quest turn-in" or "AUTO DIG ON | Treasure after current pan cycle")
                 or "AUTO DIG ON | Collecting existing maps")
         else
             tStatus("AUTO DIG ON | Farming maps at saved DIG and WATER positions")
