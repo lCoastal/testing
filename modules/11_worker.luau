@@ -84,18 +84,20 @@
             if S.treasureCycle
                 and (S.treasureRequested or questBoundaryTreasure)
                 and (not S.dredge or questBoundaryTreasure) then
-                local trOk,trErr=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
+                local trOk,trResult=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
                 if not trOk then
+                    local trErr=trResult
                     S.treasureLastError=tostring(trErr)
                     if S.treasureStatus then
                         S.treasureStatus.Text="Treasure error: "..S.treasureLastError
                     end
                     S.treasureRequested=false
                 end
-                if questBoundaryTreasure then
-                    -- tRun temporarily sets S.dredge=false, so checking
-                    -- S.dredge here would leave this boundary flag sticky.
+                if questBoundaryTreasure and trOk and trResult==true then
+                    -- Clear only after Treasure actually attempted a route.
+                    -- A cooldown/early return must not lose the handoff.
                     S.treasureDredgeQuestReady=false
+                    S.treasureAwaitingQuestBoundary=false
                 end
                 if S.treasureBusy then
                     repeat task.wait(.1) until not S.treasureBusy or not valid(id)
