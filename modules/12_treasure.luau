@@ -604,6 +604,7 @@ local function tRun(id)
             task.wait(.15)
         end
         if found or consumed then
+            retryCounts[m.guid]=0
             completedThisRun+=1
             tStatus(string.format("Resolved %d map(s) | %d still in inventory%s",
                 completedThisRun,#tMaps(),found and "" or " (chest unverified)"))
