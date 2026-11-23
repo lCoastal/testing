@@ -180,15 +180,37 @@ local function tEstimatedTravel(a,b)
     return distance
 end
 
+-- Greedy nearest-next order, using estimated walk/warp distance.
+-- Recalculate after EVERY collected map; input inventory order is ignored.
+-- Stable ties use region and GUID so scans don't shuffle unpredictably.
 local function tPickNext(list,origin)
-    local bestIndex,bestCost=nil,math.huge
+    local bestIndex,bestCost,bestKey=nil,math.huge,nil
     for i,m in ipairs(list) do
         local cost=tEstimatedTravel(origin,m.pos)
-        if cost<bestCost then
-            bestIndex,bestCost=i,cost
+        local key=tostring(m.region).."|"..tostring(m.guid)
+        if cost<bestCost-0.01 or
+            (math.abs(cost-bestCost)<=0.01 and (not bestKey or key<bestKey)) then
+            bestIndex,bestCost,bestKey=i,cost,key
         end
     end
-    return bestIndex
+    return bestIndex,bestCost
+end
+
+local function tRoutePreview(maps,position)
+    local remaining={}
+    for i,m in ipairs(maps) do remaining[i]=m end
+    local results={}
+    for i=1,math.min(12,#remaining) do
+        local at,distance=tPickNext(remaining,position)
+        if not at then break end
+        local m=table.remove(remaining,at)
+        results[#results+1]=string.format(
+            "%d. %s (~%.0f studs estimated) | %.0f %.0f %.0f",
+            i,m.region,distance,m.pos.X,m.pos.Y,m.pos.Z)
+        position=m.pos
+    end
+    if #remaining>0 then results[#results+1]="... and "..#remaining.." more" end
+    return results
 end
 
 -- Treasure-only movement fallback. Normal Dredge and Farm paths are unchanged.
@@ -798,6 +820,17 @@ local function tScan()
     lines[#lines+1]="Run threshold: "..tostring(S.treasureMinMaps).." maps"
     lines[#lines+1]="Dig position saved: "..tostring(S.dig~=nil)
     lines[#lines+1]="Water/pan position saved: "..tostring(S.water~=nil)
+    lines[#lines+1]="Selection: shortest estimated travel first (walk/warp)."
+    lines[#lines+1]="Order recalculated after each map; failed maps retry after cooldown."
+    local rp=root()
+    if rp and #available>0 then
+        lines[#lines+1]=""
+        lines[#lines+1]="ESTIMATED NEXT MAPS:"
+        for _,line in ipairs(tRoutePreview(available,rp.Position)) do
+            lines[#lines+1]=line
+        end
+    end
+    lines[#lines+1]=""
     lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
     lines[#lines+1]="Dredge: "..tostring(S.dredge)..
         " | running: "..tostring(S.running)
