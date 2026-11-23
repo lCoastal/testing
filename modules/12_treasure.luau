@@ -810,11 +810,12 @@ task.spawn(function()
             -- can be stale; it must not block the completed-quest handoff.
             local boundaryAvailable=S.dredgeServerStatus
                 and questMode(S.dredgeServerStatus)=="available"
-            if not mining or boundaryAvailable then
+            if not S.treasurePanCycleActive and
+                (not mining or boundaryAvailable) then
                 S.treasureDispatchBusy=true
                 local id=S.token
                 S.diagEvent("TREASURE_DISPATCH",
-                    "Quest boundary confirmed; maps="..#tReadyMaps()..
+                    "Dredge task boundary ready; maps="..#tReadyMaps()..
                     " threshold="..S.treasureMinMaps..
                     " action="..action)
                 local ok,result=pcall(S.treasureCycle,id,panTool() or S.panInBackpack())
