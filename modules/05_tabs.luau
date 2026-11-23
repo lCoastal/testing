@@ -26,10 +26,9 @@
     return make(class,props,Body)
 end
       farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage=
-    page(),page(true),page(),page(),page(),page()
--- Dredge and Treasure share one scrolling workflow tab.
+    page(),page(),page(),page(),page(),page()
+-- Dredge + Maps uses a two-column, non-scrolling layout.
 treasurePage=dredgePage
-dredgePage.CanvasSize=UDim2.fromOffset(0,1050)
       TAB_NAMES={"FARM","DREDGE + MAPS","ZONE","REFORGE","DEBUG","PACK"}
       TAB_PAGES={farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage}
       tabButtons={}
@@ -42,8 +41,18 @@ end
 -- diagnostic/reforge pages. A later setup error can no longer leave a
 -- blank window with invisible tabs.
       function openTab(n)
+    -- The combined automation tab is wider; all other tabs keep their
+    -- original compact proportions and positions.
+    local wide=(n==2)
+    local width,height=wide and 700 or 340,wide and 620 or 540
+    W.Size=UDim2.fromOffset(width,height)
+    W.Position=UDim2.new(.5,-math.floor(width/2),.5,-math.floor(height/2))
+    local cell=(width-8)/#TAB_NAMES
     for i,pageFrame in ipairs(TAB_PAGES) do
         pageFrame.Visible=i==n
+        tabButtons[i].Position=UDim2.fromOffset(math.floor(4+(i-1)*cell),36)
+        tabButtons[i].Size=UDim2.fromOffset(math.floor(cell-2),32)
+        tabButtons[i].TextSize=wide and 10 or (i==2 and 7 or 8)
         tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(70,74,83) or PANEL
         tabButtons[i].TextColor3=i==n and FG or MUTED
     end
@@ -270,6 +279,41 @@ function S.getFallbackWants()
     end
     return nil
 end
+
+-- DREDGE + MAPS: one screen, no scrolling. Left column is Dredge;
+-- the Treasure module draws its controls in the right column.
+S.dredgeSectionTitle=label("1  /  AUTO DREDGE",14,4,312,23,13,FG)
+relocate(S.dredgeSectionTitle,dredgePage,14,4)
+relocate(dredgeButton,dredgePage,14,29)
+dredgeButton.Size=UDim2.fromOffset(312,38)
+relocate(ringButton,dredgePage,14,75)
+relocate(riskButton,dredgePage,177,75)
+relocate(fullQualityLabel,dredgePage,14,117)
+fullQualityLabel.Size=UDim2.fromOffset(312,20)
+relocate(dredgeStatus,dredgePage,14,140)
+dredgeStatus.Size=UDim2.fromOffset(312,45)
+relocate(dredgeObjectiveLabel,dredgePage,14,191)
+dredgeObjectiveLabel.Size=UDim2.fromOffset(312,76)
+relocate(dredgeWorkLabel,dredgePage,14,270)
+dredgeWorkLabel.Size=UDim2.fromOffset(312,61)
+relocate(S.fallbackTitle,dredgePage,14,335)
+S.fallbackTitle.Size=UDim2.fromOffset(312,23)
+relocate(S.fallbackInput,dredgePage,14,362)
+relocate(S.fallbackToggle,dredgePage,212,362)
+relocate(S.fallbackStatus,dredgePage,14,402)
+S.fallbackStatus.Size=UDim2.fromOffset(312,30)
+relocate(S.autoFlareCraftButton,dredgePage,14,440)
+S.autoFlareCraftButton.Size=UDim2.fromOffset(312,32)
+relocate(S.autoFlareCraftStatus,dredgePage,14,477)
+S.autoFlareCraftStatus.Size=UDim2.fromOffset(312,23)
+S.autoFlareCraftStatus.TextSize=9
+
+S.automationDivider=make("Frame",{
+    Position=UDim2.fromOffset(338,8),
+    Size=UDim2.fromOffset(1,492),
+    BorderSizePixel=0,
+    BackgroundColor3=Color3.fromRGB(69,71,79)
+},dredgePage)
 
 -- Zone Diagnostic: concise by default. All legacy preset controls retained
 -- in a hidden, scrollable editor rather than deleted.
