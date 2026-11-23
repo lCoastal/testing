@@ -802,7 +802,11 @@ task.spawn(function()
             local mining=action=="COLLECT_TO_CAPACITY"
                 or action=="PAN_INVOKE"
                 or action=="SHAKE_LOOP"
-            if not mining then
+            -- A confirmed available quest means the old mining trace
+            -- can be stale; it must not block the completed-quest handoff.
+            local boundaryAvailable=S.dredgeServerStatus
+                and questMode(S.dredgeServerStatus)=="available"
+            if not mining or boundaryAvailable then
                 S.treasureDispatchBusy=true
                 local id=S.token
                 S.diagEvent("TREASURE_DISPATCH",
