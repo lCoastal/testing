@@ -520,8 +520,9 @@ end
         S.treasureDredgeQuestReady=true
         S.diagEvent("TREASURE_DREDGE_QUEST_COMPLETE",
             "Dredge Master turn-in acknowledged; treasure before next quest")
-    elseif nextMode=="active" and not S.treasureAwaitingQuestBoundary then
-        S.treasureDredgeQuestReady=false
+    -- Do NOT erase a pending Treasure handoff when a subsequent poll
+    -- reports an active quest. The farm worker owns clearing the latch
+    -- only after it actually enters Treasure.
     end
     if not old or old.status~=state.status or old.step~=state.step
       or old.canStart~=state.canStart then
@@ -1770,6 +1771,17 @@ end
             dredgeText("Going to Dredge Master: "..tostring(err))
         end
     elseif mode=="available" then
+        -- A completed quest must hand off to Treasure BEFORE StartQuest.
+        -- The worker may not have reached its Treasure branch yet.
+        if S.treasureEnabled and S.treasureCanStart
+            and S.treasureCanStart() and
+            (S.treasureDredgeQuestReady or S.treasureAwaitingQuestBoundary) then
+            S.treasureDredgeQuestReady=true
+            S.treasureAwaitingQuestBoundary=false
+            S.dredgeCurrentWork="TREASURE HANDOFF: waiting for map route"
+            S.dredgeNextWork="Collect Treasure Maps before next quest"
+            return
+        end
         if os.clock()-(S.dredgeTransitionAt or 0)<7 then
             dredgeText("StartQuest sent; awaiting Started step 1")
             return
