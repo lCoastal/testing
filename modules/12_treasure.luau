@@ -891,11 +891,13 @@ local function tScan()
         " | running: "..tostring(S.running)
     lines[#lines+1]="Quest mode: "..
         tostring(S.dredgeServerStatus and
-            (S.dredgeServerStatus.status or "unknown") or "none")..
+            questMode(S.dredgeServerStatus) or "none")..
+        " | raw status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status)..
         " | step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step)
     lines[#lines+1]="Quest boundary: "..tostring(S.treasureDredgeQuestReady)..
         " | awaiting turn-in: "..tostring(S.treasureAwaitingQuestBoundary)
     lines[#lines+1]="Requested: "..tostring(S.treasureRequested)..
+        " | dispatcher: "..tostring(S.treasureDispatchBusy)..
         " | busy: "..tostring(S.treasureBusy)..
         " | cooldown: "..string.format("%.1f",
             math.max(0,(S.treasureNextTryAt or 0)-os.clock()))
