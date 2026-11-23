@@ -510,15 +510,17 @@ end
         " status="..tostring(state.status).." step="..tostring(state.step))
     local old=S.dredgeServerStatus
     S.dredgeServerStatus=state
-    -- Treasure may begin only after a real Dredge Master turn-in was
-    -- sent AND the server confirms that quest is now available.
-    -- This is the boundary between quests, never an active objective.
-    if old and questMode(old)=="turnin"
-        and questMode(state)=="available" and S.dredgeTurninSent then
+    -- A successful NPC turn-in is latched until the server confirms
+    -- the previous quest has ended. The poller can skip the short-lived
+    -- "turnin" snapshot, so comparing ONLY old->new modes loses the handoff.
+    local nextMode=questMode(state)
+    if S.treasureAwaitingQuestBoundary
+        and (nextMode=="available" or nextMode=="unavailable") then
+        S.treasureAwaitingQuestBoundary=false
         S.treasureDredgeQuestReady=true
         S.diagEvent("TREASURE_DREDGE_QUEST_COMPLETE",
-            "Turn-in confirmed by CanStartQuest; treasure can run before next quest")
-    elseif questMode(state)=="active" then
+            "Dredge Master turn-in acknowledged; treasure before next quest")
+    elseif nextMode=="active" and not S.treasureAwaitingQuestBoundary then
         S.treasureDredgeQuestReady=false
     end
     if not old or old.status~=state.status or old.step~=state.step
@@ -1757,6 +1759,9 @@ end
         S.dredgeTransitionAt=os.clock()
         S.dredgeTurninSent=ok
         if ok then
+            -- Persist across polling snapshots and transition-mode changes.
+            -- No treasure trip is allowed until CanStartQuest leaves turn-in.
+            S.treasureAwaitingQuestBoundary=true
             S.dredgeTransitionAttempts+=1
             dredgeText("Talked to nearby Dredge Master ("..
                 S.dredgeTransitionAttempts.."/3); verifying")
