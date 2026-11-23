@@ -471,6 +471,30 @@ local function tRun(id)
     local initialCount=#list
     local steps=0
     local retryCounts={}
+    local MAX_RETRIES_PER_MAP=3
+    local function failedMap(m,cooldown,reason)
+        local count=(retryCounts[m.guid] or 0)+1
+        retryCounts[m.guid]=count
+        failedThisRun+=1
+        firstFailure=firstFailure or reason
+        S.treasureRetryAfter[m.guid]=os.clock()+cooldown
+        S.treasureLastError=reason
+        S.diagEvent("TREASURE_MAP_RETRY",
+            string.format("%s | %d/%d | retry in %ds | %s",
+                tostring(m.region),count,MAX_RETRIES_PER_MAP,cooldown,reason))
+        if count>=MAX_RETRIES_PER_MAP then
+            ok=false
+            err=string.format(
+                "Map failed %d times at %s (%.1f, %.1f, %.1f): %s. Returning to Dredge with map kept.",
+                count,tostring(m.region),m.pos.X,m.pos.Y,m.pos.Z,reason)
+            tStatus("Treasure stopped retrying: "..err)
+            return true
+        end
+        tStatus(string.format(
+            "Treasure retry %d/%d | %s | %ds | %s",
+            count,MAX_RETRIES_PER_MAP,tostring(m.region),cooldown,reason))
+        return false
+    end
     -- The threshold is an entry condition ONLY. Once Treasure begins,
     -- it owns the worker until the real inventory reaches zero maps.
     -- Individual failures wait for their retry cooldown inside this trip;
@@ -494,10 +518,9 @@ local function tRun(id)
         end
         steps+=1
         if steps>250 then
-            -- Treat this as a safety halt, not permission to resume Dredge
-            -- with maps still held. Wait for the user to disable Auto Dig.
-            tStatus("Treasure ACTIVE | route safety limit reached; Dredge remains paused")
-            while valid(id) and S.treasureEnabled do task.wait(.5) end
+            ok=false
+            err="Treasure route safety limit reached; returning to Dredge with maps kept"
+            S.diagEvent("TREASURE_SAFETY_LIMIT",err)
             break
         end
 
@@ -515,11 +538,9 @@ local function tRun(id)
             steps,m.region,m.pos.X,m.pos.Y,m.pos.Z))
         local reached,travelWhy=tTravel(CFrame.new(m.pos),id,"map in "..m.region)
         if not reached then
-            -- Skip a blocked map and continue collecting other maps.
-            retryCounts[m.guid]=(retryCounts[m.guid] or 0)+1
-            S.treasureRetryAfter[m.guid]=os.clock()+60
-            failedThisRun+=1
-            firstFailure=firstFailure or ("Unable to reach "..m.region..": "..tostring(travelWhy))
+            local fatal=failedMap(m,5,
+                "Unable to reach "..m.region..": "..tostring(travelWhy))
+            if fatal then break end
             continue
         end
 
@@ -562,16 +583,18 @@ local function tRun(id)
             if attempt<3 then task.wait(.35) end
         end
         if not wasAccepted then
-            retryCounts[m.guid]=(retryCounts[m.guid] or 0)+1
-            S.treasureRetryAfter[m.guid]=os.clock()+60
-            failedThisRun+=1
-            firstFailure=firstFailure or
-                ("Treasure dig not accepted: "..tostring(why or response))
+            -- A timed-out/uncertain RPC may still execute on the server,
+            -- so leave a longer delay than an explicitly rejected dig.
+            local cooldown=sent and 10 or 20
+            local reason="Treasure dig "..(sent and "rejected" or "unconfirmed")..
+                ": "..tostring(why or response)
+            local fatal=failedMap(m,cooldown,reason)
+            if fatal then break end
             continue
         end
         -- An accepted request cannot be duplicated until the map has had
         -- time to replicate. Keep the same run alive if it remains held.
-        S.treasureRetryAfter[m.guid]=os.clock()+90
+        S.treasureRetryAfter[m.guid]=os.clock()+20
         local found=false
         local consumed=false
         local deadline=os.clock()+18
@@ -588,11 +611,9 @@ local function tRun(id)
             -- inventory drained while the map Tool is still present.
             if m.tool.Parent==nil then S.treasureRetryAfter[m.guid]=nil end
         else
-            retryCounts[m.guid]=(retryCounts[m.guid] or 0)+1
-            S.treasureRetryAfter[m.guid]=os.clock()+90
-            failedThisRun+=1
-            firstFailure=firstFailure or
-                "Dig accepted, but map still present and no chest detected in 18 seconds"
+            local fatal=failedMap(m,20,
+                "Dig accepted, but map still present and no chest detected in 18 seconds")
+            if fatal then break end
         end
     end
 
@@ -601,7 +622,7 @@ local function tRun(id)
         ok,err=false,"Stopped by user"
     elseif mapsLeft>0 then
         ok=false
-        err="Treasure route interrupted with "..mapsLeft.." map(s) remaining"
+        err=err or ("Treasure route interrupted with "..mapsLeft.." map(s) remaining")
     elseif failedThisRun>0 then
         -- Some attempts failed earlier, but the same run eventually cleared
         -- all maps. The whole run succeeded despite the temporary errors.
