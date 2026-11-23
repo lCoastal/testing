@@ -739,6 +739,18 @@ local function tScan()
     lines[#lines+1]="Dig position saved: "..tostring(S.dig~=nil)
     lines[#lines+1]="Water/pan position saved: "..tostring(S.water~=nil)
     lines[#lines+1]="Last error: "..tostring(S.treasureLastError or "None")
+    lines[#lines+1]="Dredge: "..tostring(S.dredge)..
+        " | running: "..tostring(S.running)
+    lines[#lines+1]="Quest mode: "..
+        tostring(S.dredgeServerStatus and
+            (S.dredgeServerStatus.status or "unknown") or "none")..
+        " | step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step)
+    lines[#lines+1]="Quest boundary: "..tostring(S.treasureDredgeQuestReady)..
+        " | awaiting turn-in: "..tostring(S.treasureAwaitingQuestBoundary)
+    lines[#lines+1]="Requested: "..tostring(S.treasureRequested)..
+        " | busy: "..tostring(S.treasureBusy)..
+        " | cooldown: "..string.format("%.1f",
+            math.max(0,(S.treasureNextTryAt or 0)-os.clock()))
     tStatus(table.concat(lines,"\n"))
 end
 local function tRefresh()
