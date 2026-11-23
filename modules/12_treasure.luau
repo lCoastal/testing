@@ -903,7 +903,7 @@ local function tScan()
             questMode(S.dredgeServerStatus) or "none")..
         " | raw status: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.status)..
         " | step: "..tostring(S.dredgeServerStatus and S.dredgeServerStatus.step)
-    lines[#lines+1]="Quest boundary: "..tostring(S.treasureDredgeQuestReady)..
+    lines[#lines+1]="Task handoff ready: "..tostring(S.treasureDredgeQuestReady)..
         " | turn-in pending: "..tostring(S.treasureAwaitingQuestBoundary)..
         " | task: "..tostring(S.treasureTaskReason or "none")
     lines[#lines+1]="Requested: "..tostring(S.treasureRequested)..
