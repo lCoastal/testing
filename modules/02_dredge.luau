@@ -510,6 +510,17 @@ end
         " status="..tostring(state.status).." step="..tostring(state.step))
     local old=S.dredgeServerStatus
     S.dredgeServerStatus=state
+    -- Treasure may begin only after a real Dredge Master turn-in was
+    -- sent AND the server confirms that quest is now available.
+    -- This is the boundary between quests, never an active objective.
+    if old and questMode(old)=="turnin"
+        and questMode(state)=="available" and S.dredgeTurninSent then
+        S.treasureDredgeQuestReady=true
+        S.diagEvent("TREASURE_DREDGE_QUEST_COMPLETE",
+            "Turn-in confirmed by CanStartQuest; treasure can run before next quest")
+    elseif questMode(state)=="active" then
+        S.treasureDredgeQuestReady=false
+    end
     if not old or old.status~=state.status or old.step~=state.step
       or old.canStart~=state.canStart then
         outputDebug("[GALAXIS DREDGE QUEST] CanStartQuest:",tostring(state.canStart),
