@@ -20,6 +20,7 @@
         S.treasureDredgeQuestReady=false
         S.treasureTaskReason=nil
         S.dredgeTaskSeen={}
+        S.treasurePanCycleActive=false
         S.enchantedRecording=nil
         -- Preserve the recorded Enchanted entry path across OFF -> ON.
         -- Restarting without that path previously broke the return route.
@@ -160,6 +161,7 @@
                     end)
                 end
                 local ok,result=pcall(farming,id,r,target)
+                S.treasurePanCycleActive=false
                 reason=ok and (result or "Cycle ended unexpectedly")
                     or ("Runtime error: "..tostring(result))
             end
