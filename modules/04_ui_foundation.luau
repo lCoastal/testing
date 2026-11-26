@@ -23,12 +23,18 @@ if type(gethui)=="function" then
 end
 G.Parent=parent
 S.Gui=G
-      BG=Color3.fromRGB(22,23,27)
-      PANEL=Color3.fromRGB(39,41,47)
+      BG=Color3.fromRGB(20,26,34)
+      PANEL=Color3.fromRGB(40,51,63)
       FG=Color3.fromRGB(237,237,241)
-      MUTED=Color3.fromRGB(145,148,158)
+      MUTED=Color3.fromRGB(174,189,201)
       function make(class,props,par)
     local o=Instance.new(class)
+    if o:IsA("TextLabel") or o:IsA("TextButton") then
+        o.TextTruncate=Enum.TextTruncate.AtEnd
+        o.ClipsDescendants=true
+    elseif o:IsA("TextBox") then
+        o.ClipsDescendants=true
+    end
     for k,v in pairs(props) do o[k]=v end
     o.Parent=par
     return o
@@ -40,14 +46,14 @@ end
       W=rounded(make("Frame",{
     Size=UDim2.fromOffset(340,540),
     Position=UDim2.new(.5,-170,.5,-270),
-    BackgroundColor3=BG,BorderSizePixel=0,Active=true
+    BackgroundColor3=BG,BorderSizePixel=0,Active=true,ClipsDescendants=true
 },G))
-make("UIStroke",{Color=Color3.fromRGB(69,71,79),Thickness=1},W)
+make("UIStroke",{Color=Color3.fromRGB(64,81,94),Thickness=1},W)
       H=make("Frame",{Size=UDim2.new(1,0,0,43),BackgroundTransparency=1,Active=true},W)
 make("TextLabel",{
     Position=UDim2.fromOffset(14,0),Size=UDim2.fromOffset(245,43),
-    BackgroundTransparency=1,Text="GALAXIS HUB  /  BETA",
-    TextColor3=FG,Font=Enum.Font.GothamBold,TextSize=12,
+    BackgroundTransparency=1,Text="Galaxis Hub   /   Beta",
+    TextColor3=FG,Font=Enum.Font.GothamBold,TextSize=15,
     TextXAlignment=Enum.TextXAlignment.Left
 },H)
       function button(txt,x,y,w,h,par)
@@ -59,6 +65,8 @@ make("TextLabel",{
 end
       X=button("×",302,7,29,29,H)
       Min=button("−",269,7,29,29,H)
+X.Position=UDim2.new(1,-38,0,7)
+Min.Position=UDim2.new(1,-71,0,7)
 -- Install a working close button BEFORE any later UI setup can fail.
 -- When initialization finishes, S.Close performs normal cleanup.
 bind(X.MouseButton1Click,function()
@@ -85,7 +93,8 @@ end)
         Font=Enum.Font.Gotham,TextSize=size or 11,TextXAlignment=Enum.TextXAlignment.Left
     },Body)
 end
-      status=label("Idle",14,7,312,24,12,MUTED)
+      status=label("Idle",14,1,312,33,12,MUTED)
+status.TextWrapped=true
       digB=button("SET DIG",14,38,149,36,Body)
       waterB=button("SET WATER",177,38,149,36,Body)
       digXYZ=label("Not saved",14,78,149,22,10,MUTED)

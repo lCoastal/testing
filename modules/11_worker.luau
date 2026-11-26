@@ -145,7 +145,7 @@
             local target=S.capacity()
             local reason
             if not r then
-                reason="Pan not equipped"
+                reason="No pan found on character or in backpack"
             elseif not target or target<=0 then
                 reason="Capacity unavailable"
             elseif fill(r)==nil then
@@ -407,7 +407,12 @@ S.uiMinimized=false
 bind(Min.MouseButton1Click,function()
     S.uiMinimized=not S.uiMinimized
     Body.Visible=not S.uiMinimized
-    W.Size=S.uiMinimized and UDim2.fromOffset(340,43) or UDim2.fromOffset(340,540)
+    if S.uiMinimized then
+        S.expandedWindowSize=W.Size
+        W.Size=UDim2.fromOffset(340,43)
+    else
+        W.Size=S.expandedWindowSize
+    end
     Min.Text=S.uiMinimized and "+" or "−"
 end)
 S.uiDragging=false

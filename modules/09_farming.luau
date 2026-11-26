@@ -224,12 +224,12 @@ end
         local panAttempts=0
         for _=1,15 do
             if not valid(id) then return end
-            if not requirePanEquipped(r,id) then return "Pan not equipped" end
+            if not requirePanEquipped(r,id) then return "Pan must be equipped to start panning" end
             -- Immediately try Pan after arriving at water.
             -- Position checks are reserved for rejected Dredge calls.
             panAttempts+=1
             local ok,response,err=invoke(r.pan,id)
-            if not ok then return "Pan call failed: "..tostring(err) end
+            if not ok then return "Pan request failed: "..tostring(err) end
             if response==true then accepted=true;break end
             -- Dredge and independent Treasure farming can repair pan-water
             -- drift after explicit server rejection. Regular Farm unchanged.
@@ -245,7 +245,7 @@ end
             end
             if not pause(S.timing("panRetry"),id) then return end
         end
-        if not accepted then return "Pan rejected" end
+        if not accepted then return "Game did not accept the pan request" end
         S.traceEnd("PAN_INVOKE",string.format(
             "accepted after %d attempt(s), %.3fs",panAttempts,os.clock()-panStart))
         local panTime=os.clock()-panStart
@@ -262,12 +262,12 @@ end
             if not valid(id) then return end
             if finished() then done=true;break end
             if not requirePanEquipped(r,id) then return "Pan unequipped during shake" end
-            if not pcall(function() r.shake:FireServer() end) then return "Shake failed" end
+            if not pcall(function() r.shake:FireServer() end) then return "Shake request could not be sent" end
             if S.doubleShake then
                 if not pause(S.timing("shakeGap"),id,finished) then return end
                 if not finished() then
                     if not pcall(function() r.shake:FireServer() end) then
-                        return "Shake failed"
+                        return "Shake request could not be sent"
                     end
                 end
             end

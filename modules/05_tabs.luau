@@ -19,15 +19,15 @@
         props.ScrollBarThickness=3
         props.ScrollBarImageColor3=MUTED
         props.CanvasPosition=Vector2.zero
-        props.CanvasSize=UDim2.fromOffset(0,570)
-        props.AutomaticCanvasSize=Enum.AutomaticSize.None
+        props.CanvasSize=UDim2.fromOffset(0,0)
+        props.AutomaticCanvasSize=Enum.AutomaticSize.Y
         props.ElasticBehavior=Enum.ElasticBehavior.WhenScrollable
     end
     return make(class,props,Body)
 end
       farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage=
-    page(),page(),page(),page(),page(),page()
--- Dredge + Maps uses a two-column, non-scrolling layout.
+    page(),page(true),page(),page(),page(),page()
+-- The two-column page scrolls to controls below the visible area.
 treasurePage=dredgePage
       TAB_NAMES={"FARM","DREDGE + MAPS","ZONE","REFORGE","DEBUG","PACK"}
       TAB_PAGES={farmPage,dredgePage,diagnosticPage,reforgePage,livePage,packPage}
@@ -53,7 +53,7 @@ end
         tabButtons[i].Position=UDim2.fromOffset(math.floor(4+(i-1)*cell),36)
         tabButtons[i].Size=UDim2.fromOffset(math.floor(cell-2),32)
         tabButtons[i].TextSize=wide and 10 or (i==2 and 7 or 8)
-        tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(70,74,83) or PANEL
+        tabButtons[i].BackgroundColor3=i==n and Color3.fromRGB(44,91,95) or PANEL
         tabButtons[i].TextColor3=i==n and FG or MUTED
     end
 end
