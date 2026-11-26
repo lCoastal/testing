@@ -264,14 +264,19 @@ end
             if not requirePanEquipped(r,id) then return "Pan unequipped during shake" end
             if not pcall(function() r.shake:FireServer() end) then return "Shake failed" end
             if S.doubleShake then
-                if not pause(S.timing("shakeGap"),id,finished) then return end
+                -- Turbo: use the proven ~0.01s shake cadence. Keep the
+                -- original completion, token and equipment safeguards.
+                local gap=S.turbo and .01 or S.timing("shakeGap")
+                if not pause(gap,id,finished) then return end
                 if not finished() then
+                    if not requirePanEquipped(r,id) then return "Pan unequipped during shake" end
                     if not pcall(function() r.shake:FireServer() end) then
                         return "Shake failed"
                     end
                 end
             end
-            if not pause(S.timing("shake"),id,finished) then return end
+            local gap=(S.turbo and S.doubleShake) and .01 or S.timing("shake")
+            if not pause(gap,id,finished) then return end
         end
         if not done then
             local deadline=os.clock()+1.5
