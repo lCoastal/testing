@@ -22,7 +22,7 @@ bind(S.liveCopyButton.MouseButton1Click,function()
     S.liveDebugRecord("MANUAL_EXPORT",S.liveDebugDetails())
     S.flushLiveDebug()
     local report=string.format(
-        "PERFORMANCE: FPS %.1f | average frame %.1fms | Auto mode %s\\n",
+        "PERFORMANCE: FPS %.1f | average frame %.1fms | Auto mode %s\n",
         S.perfFPS or 0,S.perfFrameMs or 0,
         S.running and (S.dredge and "DREDGE" or "FARM") or "OFF")..
         S.diagReport().."\n--- LIVE DEBUG RECENT ---\n"..
@@ -30,7 +30,7 @@ bind(S.liveCopyButton.MouseButton1Click,function()
     local copied=false
     if type(setclipboard)=="function" then copied=pcall(setclipboard,report) end
     S.liveInfo.Text=copied and "Report copied to clipboard."
-        or "Clipboard unavailable; TXT log is still being saved."
+        or "Could not copy the report to the clipboard."
 end)
 
 -- Quest and live zone diagnostics refresh independently of farming.
@@ -65,7 +65,7 @@ end)
 bind(S.actionTraceButton.MouseButton1Click,function()
     if S.actionTraceEnabled then S.traceAction("TRACE_DISABLED","Disabled in GUI") end
     S.actionTraceEnabled=not S.actionTraceEnabled
-    S.actionTraceButton.Text="ACTION TRACE: OFF"
+    S.actionTraceButton.Text=S.actionTraceEnabled and "ACTION TRACE: ON" or "ACTION TRACE: OFF"
     if S.actionTraceEnabled then S.traceAction("TRACE_RESUMED","Enabled in GUI") end
 end)
 -- Idle signal only: no per-frame input, no extra farming calls.
