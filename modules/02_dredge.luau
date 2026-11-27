@@ -1867,8 +1867,10 @@ end
             return
         end
         if (S.dredgeTransitionAttempts or 0)>=3 then
-            dredgeText("Quest start not confirmed after 3 tries; stopped")
-            if stop then stop() end
+            S.diagEvent("DREDGE_QUEST_START_RETRY","Quest start unconfirmed after 3 attempts; retrying after cooldown")
+            S.dredgeTransitionAttempts=0
+            S.dredgeTransitionAt=os.clock()+15
+            dredgeText("Quest start unconfirmed; retrying after cooldown")
             return
         end
         S.dredgeTransitionAttempts+=1
@@ -2096,7 +2098,9 @@ end
             S.diagLastFailure=reason
             S.diagEvent("DREDGE_INIT_TIMEOUT",reason.." | "..S.diagSnapshot())
             if stop then stop() end
-            dredgeText("STOPPED: "..reason)
+            dredgeText("Quest status unavailable; retrying after cooldown: "..why)
+            S.dredgeInitAt=os.clock()+20
+            S.dredgeNextServerPoll=os.clock()+5
             return false
         end
         dredgeText("Checking CanStartQuest: "..why..
@@ -2445,8 +2449,10 @@ end
             end
             S.dredgeCurrentWork="Route blocked: "..targetZone
             S.dredgeNextWork="Check saved stone route or move manually"
-            dredgeText("Route blocked after repeated attempts: "..targetZone..": "..failure)
-            if stop then stop() end
+            S.diagEvent("DREDGE_ROUTE_COOLDOWN",tostring(targetZone)..": "..failure)
+            S.dredgeTravelFailed[targetZone]=0
+            S.dredgeTravelRetryAt=os.clock()+60
+            dredgeText("Route blocked; retrying "..targetZone.." after cooldown: "..failure)
             return false
         end
         S.traceEnd("DREDGE_ZONE_TRAVEL","arrived at "..tostring(targetZone))
