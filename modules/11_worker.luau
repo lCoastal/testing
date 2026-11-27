@@ -207,13 +207,19 @@
                     break
                 end
                 S.simpleFailures=(S.simpleFailures or 0)+1
-                if S.simpleFailures>=5 then
+                if S.simpleFailures>=5 and S.dredge then
+                    S.diagEvent("DREDGE_FAILURE_COOLDOWN",why)
+                    show("Dredge recovering after "..S.simpleFailures.." failures: "..why:sub(1,55))
+                    S.simpleFailures=0
+                    if not pause(8,id) then break end
+                elseif S.simpleFailures>=5 then
                     stop()
                     show("Stopped after 5 consecutive failures: "..why:sub(1,50))
                     break
+                else
+                    show("Retrying: "..why:sub(1,70))
+                    if not pause(.45,id) then break end
                 end
-                show("Retrying: "..why:sub(1,70))
-                if not pause(.45,id) then break end
             end
         end
     end)
